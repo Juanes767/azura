@@ -19,8 +19,14 @@ por debajo de las ventanas normales.
 ## ✨ Características
 
 - 🎞️ **Vídeos e imágenes**: mp4, webm, mkv, mov, gif, png, jpg y jpeg.
-- 📚 **Biblioteca**: importar (copiando o con enlace simbólico), buscar, filtrar
-  por tipo, favoritos, etiquetas y ordenación personalizada.
+- 📚 **Biblioteca**: importar (copiando o con enlace simbólico), importar
+  carpetas enteras, buscar, filtrar por tipo, favoritos, etiquetas, colecciones
+  y ordenación personalizada.
+- 🗂️ **Colecciones**: agrupa fondos con nombre propio y limita la rotación
+  automática a una colección.
+- 🕘 **Recientes**: historial de los últimos 30 fondos aplicados.
+- 🧹 **Limpieza automática**: al abrir, quita las referencias a fondos que ya
+  no existen y avisa de cuántas eliminó.
 - 🖼️ **Miniaturas automáticas** de cada fondo de la biblioteca.
 - 🔍 **Metadatos**: resolución, duración, fps y códec de cada fondo.
 - ▶️ **Vista previa** integrada antes de aplicar un fondo, con controles de
@@ -179,8 +185,8 @@ mantenimiento activo. Azura apunta a Cinnamon/Linux Mint con estas ventajas:
 | | Azura | Hidamari |
 | --- | --- | --- |
 | Escritorio objetivo | Cinnamon / X11 (Linux Mint) | GNOME (Flatpak) |
-| Biblioteca | miniaturas, búsqueda, etiquetas, favoritos, orden | carpeta de vídeos |
-| Cambio automático | sí (intervalo y orden aleatorio) | no |
+| Biblioteca | miniaturas, búsqueda, etiquetas, favoritos, colecciones, recientes, orden | carpeta de vídeos |
+| Cambio automático | sí (intervalo, orden aleatorio y rotación por colección) | no |
 | Pausas inteligentes | batería, inactividad, bloqueo, app en primer plano, espacio de trabajo, pantalla completa | maximizado / pantalla completa |
 | Imágenes | fondo nativo de Cinnamon, sin proceso de vídeo | frame con desenfoque (GNOME) |
 | Perfiles de temas del sistema | sí (GTK, iconos, ventanas, Cinnamon, cursor) + fastfetch + kitty | no |

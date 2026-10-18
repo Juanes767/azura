@@ -18,6 +18,13 @@ y el proyecto se adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 - `scripts/medir-rendimiento.sh` y [docs/rendimiento.md](docs/rendimiento.md)
   con mediciones reales (12.3 % CPU con VAAPI frente a 107.6 % por CPU).
 - Sección del README comparando Azura con Hidamari.
+- Colecciones con nombre: añade fondos desde la vista previa, filtra la
+  biblioteca por colección y limita el cambio automático a una de ellas.
+- Historial de recientes: los últimos 30 fondos aplicados, también como
+  filtro de la biblioteca.
+- Importar una carpeta completa de una vez (recursivo, sin duplicados).
+- Limpieza automática al abrir: quita referencias a fondos inexistentes de
+  favoritos, etiquetas, colecciones, historial y orden manual.
 
 ### Corregido
 
