@@ -148,11 +148,20 @@ eliminar un perfil también pide confirmación.
 | Perfiles | `~/.config/wallpaper-animado/perfiles` |
 | Biblioteca | `~/wallpaper-animado/assets/wallpapers` (o `$WALLPAPERS_DIR`) |
 | Miniaturas | `~/.cache/wallpaper-animado/thumbs` |
+| Sockets (daemon, mpv, vista previa) | `$XDG_RUNTIME_DIR/wallpaper-animado/` |
 
 ## ⚠️ Limitaciones
 
 - Solo X11: en Wayland el fondo no se puede anclar al escritorio.
 - La función de **perfiles está en desarrollo** y puede cambiar.
+
+## 🔐 Seguridad
+
+- Los sockets del daemon, de mpv y de la vista previa viven en
+  `$XDG_RUNTIME_DIR/wallpaper-animado/` con permisos `0700`, y el daemon solo
+  acepta conexiones del mismo usuario.
+- Los perfiles y la configuración se validan y se escriben de forma atómica.
+- Para reportar una vulnerabilidad, consulta [SECURITY.md](SECURITY.md).
 
 ## 📄 Licencia
 
