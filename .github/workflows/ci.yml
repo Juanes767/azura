@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  calidad:
+    name: Formato, Clippy, pruebas y build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias del sistema (GTK 4)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libxkbcommon-dev
+
+      - name: Toolchain de Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Caché de Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formato
+        run: cargo fmt --all --check
+
+      - name: Clippy (sin advertencias)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Pruebas
+        run: cargo test
+
+      - name: Build de release
+        run: cargo build --release
+
+  auditoria:
+    name: Auditoría de dependencias
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      checks: write
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.1.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
