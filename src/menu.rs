@@ -521,6 +521,7 @@ struct AppUi {
     txt_daemon: Label,
     lbl_hotkey: Label,
     lbl_deps: Label,
+    lbl_hwdec: Label,
     lbl_info_hotkey: Label,
     lbl_info_hotkey_siguiente: Label,
     lbl_info_servidor: Label,
@@ -992,6 +993,8 @@ impl AppUi {
             self.lbl_info_hotkey_siguiente.set_text("—");
             self.lbl_deps.set_visible(false);
             self.lbl_info_servidor.set_text("Apagado");
+            self.lbl_hwdec.set_text("—");
+            self.lbl_hwdec.remove_css_class("deps-warn");
             self.btn_pausa.set_sensitive(false);
             self.btn_quitar.set_sensitive(false);
             return;
@@ -1028,6 +1031,18 @@ impl AppUi {
         } else {
             self.lbl_deps.set_visible(true);
             self.lbl_deps.set_text(&format!("⚠ {}", avisos.join(" · ")));
+        }
+
+        let software = matches!(est.hwdec.as_deref(), Some("no"));
+        self.lbl_hwdec.set_text(&match est.hwdec.as_deref() {
+            Some("no") => "Software (CPU)".to_string(),
+            Some(v) => format!("Hardware ({})", v.to_uppercase()),
+            None => "—".to_string(),
+        });
+        if software {
+            self.lbl_hwdec.add_css_class("deps-warn");
+        } else {
+            self.lbl_hwdec.remove_css_class("deps-warn");
         }
 
         let tiene_fondo = est.wallpaper.is_some();
@@ -2233,6 +2248,15 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         });
         lista_repro.append(&row);
     }
+    {
+        let row = fila_ajuste(
+            "video-display-symbolic",
+            "Decodificación de vídeo",
+            "Estado real del motor mpv; si es por CPU, revisa los controladores del equipo",
+            &ui.lbl_hwdec,
+        );
+        lista_repro.append(&row);
+    }
     cont.append(&lista_repro);
 
     // ── Pausas inteligentes ───────────────────────────────────
@@ -2796,10 +2820,20 @@ fn guardar_perfil_ahora(ui: &Rc<AppUi>, entrada: &Entry, nombre: &str) {
 
 // ── Construcción de la ventana ─────────────────────────────────
 
+/// Textura del logo embebida en el binario; funciona también instalado.
+fn texture_logo() -> gdk::Texture {
+    let bytes = glib::Bytes::from_static(include_bytes!("../assets/icon.png"));
+    gdk::Texture::from_bytes(&bytes).expect("logo PNG inválido")
+}
+
 fn build_ui(app: &Application) {
     if let Some(display) = gdk::Display::default() {
+        // En desarrollo se usan los iconos del repo; instalado, los del sistema
+        // (/usr/share/icons/hicolor), que ya están en la búsqueda por defecto.
         let iconos = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icons");
-        gtk4::IconTheme::for_display(&display).add_search_path(&iconos);
+        if iconos.is_dir() {
+            gtk4::IconTheme::for_display(&display).add_search_path(&iconos);
+        }
     }
     gtk4::Window::set_default_icon_name("wallpaper-animado");
     let config = Config::cargar();
@@ -2826,7 +2860,7 @@ fn build_ui(app: &Application) {
 
     let marca = GtkBox::new(Orientation::Horizontal, 12);
     marca.set_margin_bottom(22);
-    let logo = Picture::for_filename(Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/icon.png"));
+    let logo = Picture::for_paintable(&texture_logo());
     logo.set_content_fit(ContentFit::Contain);
     logo.set_size_request(44, 44);
     logo.set_valign(Align::Center);
@@ -3229,6 +3263,9 @@ fn build_ui(app: &Application) {
     let lbl_info_hotkey = Label::new(Some("—"));
     let lbl_info_hotkey_siguiente = Label::new(Some("—"));
     let lbl_info_servidor = Label::new(Some("Apagado"));
+    let lbl_hwdec = Label::new(Some("—"));
+    lbl_hwdec.add_css_class("info-label");
+    lbl_hwdec.set_valign(Align::Center);
     let ui = Rc::new(AppUi {
         config: RefCell::new(config),
         dir,
@@ -3257,6 +3294,7 @@ fn build_ui(app: &Application) {
         txt_daemon: txt.clone(),
         lbl_hotkey: lbl_hotkey.clone(),
         lbl_deps: lbl_deps.clone(),
+        lbl_hwdec: lbl_hwdec.clone(),
         lbl_info_hotkey,
         lbl_info_hotkey_siguiente,
         lbl_info_servidor,

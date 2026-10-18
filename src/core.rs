@@ -198,6 +198,8 @@ pub struct EstadoDaemon {
     pub monitores: Vec<String>,
     pub fondos_por_monitor: HashMap<String, String>,
     pub uptime_seg: u64,
+    /// Decodificación activa en mpv: «vaapi», «nvdec»… o «no» si es por CPU.
+    pub hwdec: Option<String>,
 }
 
 /// Metadatos de un fondo extraídos con ffprobe.
@@ -380,16 +382,34 @@ pub fn gsettings_get(clave: &str) -> Option<String> {
 
 /// Escribe una clave de gsettings. Devuelve true si se aplicó.
 pub fn gsettings_set(clave: &str, valor: &str) -> bool {
+    // gsettings no acepta «--» antes del valor (devuelve error de uso), así que
+    // se rechazan valores que empiecen por «-»: no hay ninguno legítimo (temas,
+    // URIs) y así nunca se interpretan como opción. No hay shell de por medio.
+    if valor.starts_with('-') {
+        return false;
+    }
     let partes: Vec<&str> = clave.split_whitespace().collect();
     std::process::Command::new("gsettings")
         .arg("set")
         .args(&partes)
-        // «--» evita que un valor que empiece por «-» se interprete como opción.
-        .arg("--")
         .arg(valor)
         .status()
         .map(|e| e.success())
         .unwrap_or(false)
+}
+
+/// URI `file://` de una ruta local con el camino codificado (espacios, acentos…).
+pub fn uri_archivo(ruta: &std::path::Path) -> String {
+    let mut uri = String::from("file://");
+    for byte in ruta.to_string_lossy().bytes() {
+        let c = byte as char;
+        if c.is_ascii_alphanumeric() || matches!(c, '/' | '-' | '_' | '.' | '~') {
+            uri.push(c);
+        } else {
+            uri.push_str(&format!("%{:02X}", byte));
+        }
+    }
+    uri
 }
 
 // ── Perfiles (temas del sistema + fastfetch + kitty) ───────────
@@ -1122,6 +1142,23 @@ mod tests {
         assert_eq!(extension_fastfetch("config.json"), Some("json"));
         assert_eq!(extension_fastfetch("config.toml"), None);
         assert_eq!(extension_fastfetch("sin-extension"), None);
+    }
+
+    #[test]
+    fn gsettings_rechaza_valores_con_guion_inicial() {
+        assert!(!gsettings_set(
+            "org.cinnamon.desktop.interface gtk-theme",
+            "-peligroso"
+        ));
+    }
+
+    #[test]
+    fn uri_de_archivo_codifica_el_camino() {
+        assert_eq!(
+            uri_archivo(Path::new("/home/juan/Mis fondos/año.png")),
+            "file:///home/juan/Mis%20fondos/a%C3%B1o.png"
+        );
+        assert_eq!(uri_archivo(Path::new("/tmp/a.png")), "file:///tmp/a.png");
     }
 
     #[test]

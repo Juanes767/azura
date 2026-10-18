@@ -123,8 +123,15 @@ fn main() -> Result<()> {
         });
     }
 
-    // 2. Lanzar mpv dentro de cada ventana
+    // 2. Lanzar mpv dentro de cada ventana; las imágenes las pinta Cinnamon.
+    let imagen_nativa = !core::es_video(&wallpaper) && aplicar_imagen_nativa(&wallpaper);
+    if imagen_nativa {
+        log::info!("🖼️ Fondo inicial como imagen nativa: {:?}", wallpaper);
+    }
     for p in &pantallas {
+        if imagen_nativa {
+            continue;
+        }
         if let Err(e) = relanzar_pantalla_mpv(&config, p, false) {
             log::error!("🎥 mpv en «{}»: {}", p.nombre, e);
         }
@@ -399,6 +406,45 @@ fn enviar_mpv(socket: &Path, cmd: &str) -> Result<()> {
     Ok(())
 }
 
+/// Consulta una propiedad de mpv por IPC con un tiempo de espera corto.
+fn consultar_mpv(socket: &Path, propiedad: &str) -> Option<String> {
+    let mut stream = UnixStream::connect(socket).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .ok()?;
+    let peticion = serde_json::json!({
+        "command": ["get_property", propiedad],
+        "request_id": 1
+    });
+    stream.write_all(peticion.to_string().as_bytes()).ok()?;
+    stream.write_all(b"\n").ok()?;
+    let mut lector = BufReader::new(stream);
+    let mut linea = String::new();
+    lector.read_line(&mut linea).ok()?;
+    parsear_respuesta_mpv(&linea)
+}
+
+/// Extrae el valor de una respuesta JSON de mpv. `null` significa software.
+fn parsear_respuesta_mpv(linea: &str) -> Option<String> {
+    let valor: serde_json::Value = serde_json::from_str(linea).ok()?;
+    if valor.get("error")?.as_str()? != "success" {
+        return None;
+    }
+    match valor.get("data")? {
+        serde_json::Value::Null => Some("no".to_string()),
+        serde_json::Value::String(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// Decodificación real de la primera pantalla con mpv en ejecución.
+fn hwdec_actual(estado: &Estado) -> Option<String> {
+    estado
+        .pantallas
+        .iter()
+        .find_map(|p| consultar_mpv(&p.socket, "hwdec-current"))
+}
+
 fn enviar_a_todas(estado: &Estado, cmd: &str) {
     for p in &estado.pantallas {
         let _ = enviar_mpv(&p.socket, cmd);
@@ -439,6 +485,25 @@ fn matar_mpv(p: &Pantalla) {
         let _ = hijo.kill();
         let _ = hijo.wait();
     }
+}
+
+/// Detiene el mpv de la pantalla y limpia su estado.
+fn detener_mpv(p: &Pantalla) {
+    matar_mpv(p);
+    *p.video_actual.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
+/// Clave de Cinnamon con la imagen de fondo del escritorio.
+const GS_FONDO_ESCRITORIO: &str = "org.cinnamon.desktop.background picture-uri";
+
+/// Aplica una imagen como fondo nativo de Cinnamon (sin proceso mpv).
+/// Devuelve false si gsettings no está disponible; entonces se usa mpv.
+fn aplicar_imagen_nativa(imagen: &Path) -> bool {
+    let uri = core::uri_archivo(imagen);
+    if core::gsettings_get(GS_FONDO_ESCRITORIO).as_deref() == Some(uri.as_str()) {
+        return true;
+    }
+    core::gsettings_set(GS_FONDO_ESCRITORIO, &uri)
 }
 
 /// Lanza el mpv de una pantalla con el fondo que le corresponda.
@@ -496,6 +561,14 @@ fn aplicar_global(estado: &Estado, video: &Path) {
         if let Err(e) = cfg.guardar() {
             log::warn!("no se pudo guardar la configuración: {}", e);
         }
+    }
+    // Las imágenes no necesitan un proceso de vídeo: las pinta Cinnamon solo.
+    if !core::es_video(video) && aplicar_imagen_nativa(video) {
+        for p in &estado.pantallas {
+            detener_mpv(p);
+        }
+        log::info!("🖼️ Imagen aplicada como fondo nativo: {:?}", video);
+        return;
     }
     for p in &estado.pantallas {
         if p.mpv.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
@@ -560,6 +633,20 @@ fn aplicar_automatico(estado: &Estado, video: &Path) {
         if let Err(e) = cfg.guardar() {
             log::warn!("no se pudo guardar la configuración: {}", e);
         }
+    }
+    // Imagen global: fondo nativo; los monitores con override conservan su mpv.
+    if !core::es_video(video) && aplicar_imagen_nativa(video) {
+        for p in &estado.pantallas {
+            let con_override = {
+                let cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
+                cfg.fondos_por_monitor.contains_key(&p.nombre)
+            };
+            if !con_override {
+                detener_mpv(p);
+            }
+        }
+        log::info!("🖼️ Imagen aplicada como fondo nativo: {:?}", video);
+        return;
     }
     for p in &estado.pantallas {
         let con_override = {
@@ -626,12 +713,18 @@ fn sincronizar_pantallas(estado: &Estado, cfg: &Config) {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let es_override = cfg.fondos_por_monitor.contains_key(&p.nombre);
         match esperado {
-            Some(video) if actual.as_deref() != Some(video.as_path()) => {
+            Some(fondo) if actual.as_deref() != Some(fondo.as_path()) => {
+                // Imagen global: fondo nativo de Cinnamon, sin proceso mpv.
+                if !es_override && !core::es_video(&fondo) && aplicar_imagen_nativa(&fondo) {
+                    detener_mpv(p);
+                    continue;
+                }
                 if p.mpv.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
                     let _ = relanzar_pantalla_mpv(cfg, p, pausado);
                 } else {
-                    poner_video(p, &video);
+                    poner_video(p, &fondo);
                     if !pausado {
                         let _ = enviar_mpv(&p.socket, pausa_mpv(false));
                     }
@@ -640,11 +733,7 @@ fn sincronizar_pantallas(estado: &Estado, cfg: &Config) {
             None if actual.is_some()
                 || p.mpv.lock().unwrap_or_else(|e| e.into_inner()).is_some() =>
             {
-                if let Some(mut hijo) = p.mpv.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                    let _ = hijo.kill();
-                    let _ = hijo.wait();
-                }
-                *p.video_actual.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                detener_mpv(p);
             }
             _ => {}
         }
@@ -975,9 +1064,13 @@ fn vigilar_mpv(estado: Arc<Estado>) {
                     let pausado = estado.pausa_manual.load(Ordering::Relaxed);
                     (cfg, pausado)
                 };
-                if fondo_de_pantalla(&cfg, &p.nombre).is_some() {
-                    if let Err(e) = relanzar_pantalla_mpv(&cfg, p, pausado) {
-                        log::error!("🎥 no se pudo relanzar mpv «{}»: {}", p.nombre, e);
+                if let Some(fondo) = fondo_de_pantalla(&cfg, &p.nombre) {
+                    let es_override = cfg.fondos_por_monitor.contains_key(&p.nombre);
+                    // Las imágenes globales viven en Cinnamon; no requieren mpv.
+                    if es_override || core::es_video(&fondo) {
+                        if let Err(e) = relanzar_pantalla_mpv(&cfg, p, pausado) {
+                            log::error!("🎥 no se pudo relanzar mpv «{}»: {}", p.nombre, e);
+                        }
                     }
                 }
             }
@@ -1301,6 +1394,7 @@ fn ejecutar(cmd: Comando, estado: &Arc<Estado>) -> serde_json::Value {
                 monitores: estado.pantallas.iter().map(|p| p.nombre.clone()).collect(),
                 fondos_por_monitor: cfg.fondos_por_monitor.clone(),
                 uptime_seg: estado.inicio.elapsed().as_secs(),
+                hwdec: hwdec_actual(estado),
             };
             let mut valor = serde_json::to_value(estado_daemon)
                 .unwrap_or_else(|_| serde_json::json!({ "ok": false }));
@@ -1586,5 +1680,20 @@ impl ksni::Tray for Bandeja {
             }
             .into(),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn respuesta_hwdec_de_mpv() {
+        let vaapi = r#"{"data":"vaapi","error":"success","request_id":1}"#;
+        assert_eq!(parsear_respuesta_mpv(vaapi).as_deref(), Some("vaapi"));
+        let software = r#"{"data":null,"error":"success","request_id":1}"#;
+        assert_eq!(parsear_respuesta_mpv(software).as_deref(), Some("no"));
+        assert!(parsear_respuesta_mpv(r#"{"error":"property not found"}"#).is_none());
+        assert!(parsear_respuesta_mpv("no es json").is_none());
     }
 }

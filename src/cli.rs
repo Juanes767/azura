@@ -208,6 +208,14 @@ fn imprimir_estado(valor: &serde_json::Value) -> ExitCode {
             "falta"
         }
     );
+    println!(
+        "Decodificación:    {}",
+        match estado.hwdec.as_deref() {
+            Some("no") => "software (CPU)".to_string(),
+            Some(v) => format!("hardware ({v})"),
+            None => "sin dato".to_string(),
+        }
+    );
     ExitCode::SUCCESS
 }
 
