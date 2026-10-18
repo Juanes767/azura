@@ -1100,7 +1100,7 @@ impl AppUi {
                     cfg.fondos_por_monitor.clear();
                 }
             }
-            cfg.guardar();
+            let _ = cfg.guardar();
         }
         let conectado = enviar_comando(&json);
         self.recargar();
@@ -1158,7 +1158,7 @@ impl AppUi {
                 cfg.favoritos.push(ruta);
                 ahora_fav = true;
             }
-            cfg.guardar();
+            let _ = cfg.guardar();
         }
         enviar_guardar_config(&self.config);
         mostrar_favorito(boton, ahora_fav);
@@ -1210,7 +1210,7 @@ impl AppUi {
             let mut cfg = self.config.borrow_mut();
             cfg.current_wallpaper = None;
             cfg.fondos_por_monitor.clear();
-            cfg.guardar();
+            let _ = cfg.guardar();
         }
         self.recargar();
         self.toast("Fondo quitado", "user-trash-symbolic");
@@ -1251,7 +1251,7 @@ impl AppUi {
             if era_activo {
                 cfg.current_wallpaper = None;
             }
-            cfg.guardar();
+            let _ = cfg.guardar();
         }
         self.cerrar_lightbox();
         self.recargar();
@@ -1286,7 +1286,7 @@ impl AppUi {
         }
         cfg.orden_manual = orden;
         cfg.orden_biblioteca = "manual".to_string();
-        cfg.guardar();
+        let _ = cfg.guardar();
         drop(cfg);
         self.recargar();
     }
@@ -1662,7 +1662,7 @@ impl ProcesoPreview {
             let _ = conn.destroy_window(ventana_x);
             let _ = conn.flush();
         }
-        let _ = std::fs::remove_file(&self.socket);
+        core::eliminar_socket(&self.socket);
     }
 
     fn enviar(&self, cmd: &str) {
@@ -1729,8 +1729,8 @@ fn abrir_preview(ui: &Rc<AppUi>, parent: &ApplicationWindow, path: &Path) {
         .build();
     ventana.add_css_class("preview-shell");
 
-    let socket = std::env::temp_dir().join(format!(
-        "wallpaper-preview-{}-{}.sock",
+    let socket = core::dir_sockets().join(format!(
+        "preview-{}-{}.sock",
         std::process::id(),
         aleatorio(1_000_000)
     ));
@@ -1818,7 +1818,7 @@ fn abrir_preview(ui: &Rc<AppUi>, parent: &ApplicationWindow, path: &Path) {
                 } else {
                     cfg.etiquetas.insert(clave, vistas);
                 }
-                cfg.guardar();
+                let _ = cfg.guardar();
             }
             enviar_guardar_config(&ui2.config);
             ui2.toast("Etiquetas guardadas", "emblem-ok-symbolic");
@@ -2086,7 +2086,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         sw.connect_active_notify(move |s| {
             let activo = s.is_active();
             ui2.config.borrow_mut().autostart = activo;
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
             if let Ok(exe) = std::env::current_exe() {
                 let menu_dir = exe.parent().unwrap_or(Path::new("."));
@@ -2114,7 +2114,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui2 = ui.clone();
         sw.connect_active_notify(move |s| {
             ui2.config.borrow_mut().enlazar_al_importar = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
         });
         lista_bib.append(&row);
     }
@@ -2136,7 +2136,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui2 = ui.clone();
         sw.connect_active_notify(move |s| {
             ui2.config.borrow_mut().pausa_fullscreen = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         lista_repro.append(&row);
@@ -2154,7 +2154,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui2 = ui.clone();
         sw.connect_active_notify(move |s| {
             ui2.config.borrow_mut().pausa_bateria = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         lista_repro.append(&row);
@@ -2182,7 +2182,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
             b.connect_toggled(move |btn| {
                 if btn.is_active() {
                     ui2.config.borrow_mut().fps_limit = valor;
-                    ui2.config.borrow().guardar();
+                    let _ = ui2.config.borrow().guardar();
                     enviar_guardar_config(&ui2.config);
                 }
             });
@@ -2208,7 +2208,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui2 = ui.clone();
         sw.connect_active_notify(move |s| {
             ui2.config.borrow_mut().pausa_app = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         lista_repro.append(&row);
@@ -2226,7 +2226,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui2 = ui.clone();
         sw.connect_active_notify(move |s| {
             ui2.config.borrow_mut().pausa_workspace = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         lista_repro.append(&row);
@@ -2249,7 +2249,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui2 = ui.clone();
         sw.connect_active_notify(move |s| {
             ui2.config.borrow_mut().pausa_bloqueo = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         lista_pausas.append(&row);
@@ -2280,13 +2280,13 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         sw.connect_active_notify(move |s| {
             spin2.set_sensitive(s.is_active());
             ui2.config.borrow_mut().pausa_inactividad = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         let ui3 = ui.clone();
         spin.connect_value_changed(move |s| {
             ui3.config.borrow_mut().pausa_inactividad_minutos = s.value() as u32;
-            ui3.config.borrow().guardar();
+            let _ = ui3.config.borrow().guardar();
             enviar_guardar_config(&ui3.config);
         });
         lista_pausas.append(&row);
@@ -2325,7 +2325,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui2 = ui.clone();
         sw.connect_active_notify(move |s| {
             ui2.config.borrow_mut().slideshow_aleatorio = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         lista_auto.append(&row);
@@ -2352,7 +2352,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui2 = ui.clone();
         sw_slideshow.connect_active_notify(move |s| {
             ui2.config.borrow_mut().slideshow = s.is_active();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         let row_sens = row_intervalo.clone();
@@ -2361,7 +2361,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
         let ui3 = ui.clone();
         spin.connect_value_changed(move |s| {
             ui3.config.borrow_mut().slideshow_minutos = s.value() as u32;
-            ui3.config.borrow().guardar();
+            let _ = ui3.config.borrow().guardar();
             enviar_guardar_config(&ui3.config);
         });
         lista_auto.append(&row_intervalo);
@@ -2396,7 +2396,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
                 return;
             };
             ui2.config.borrow_mut().hotkey = (*id).to_string();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         lista_atajos.append(&row);
@@ -2426,7 +2426,7 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
                 return;
             };
             ui2.config.borrow_mut().hotkey_siguiente = (*id).to_string();
-            ui2.config.borrow().guardar();
+            let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
         lista_atajos.append(&row);
@@ -3245,7 +3245,7 @@ fn build_ui(app: &Application) {
                         .collect();
                 }
                 cfg.orden_biblioteca = orden.id().to_string();
-                cfg.guardar();
+                let _ = cfg.guardar();
             }
             enviar_guardar_config(&ui2.config);
             ui2.recargar();

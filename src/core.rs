@@ -7,7 +7,42 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-pub const SOCKET_IPC: &str = "/tmp/wallpaper-animado.sock";
+/// Directorio privado (0700) donde viven los sockets de la aplicación.
+///
+/// Prefiere `$XDG_RUNTIME_DIR` (por usuario, ya es 0700); si no existe, cae al
+/// directorio de caché y, en último caso, al temporal del sistema. Así otros
+/// usuarios locales no pueden precrear ni conectar con nuestros sockets.
+pub fn dir_sockets() -> PathBuf {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
+    let base = dirs::runtime_dir()
+        .or_else(dirs::cache_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("wallpaper-animado");
+    let _ = std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&base);
+    // Si el directorio ya existía, asegura igualmente los permisos privados.
+    let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
+    base
+}
+
+/// Ruta del socket IPC del daemon.
+pub fn socket_ipc() -> PathBuf {
+    dir_sockets().join("daemon.sock")
+}
+
+/// Elimina `ruta` solo si es un socket Unix. Nunca borra archivos ni symlinks.
+pub fn eliminar_socket(ruta: &Path) {
+    use std::os::unix::fs::FileTypeExt;
+
+    if let Ok(meta) = std::fs::symlink_metadata(ruta) {
+        if meta.file_type().is_socket() {
+            let _ = std::fs::remove_file(ruta);
+        }
+    }
+}
 
 /// Presets de atajo global: (id, descripción legible).
 pub const HOTKEYS: [(&str, &str); 5] = [
@@ -120,18 +155,32 @@ impl Config {
             .unwrap_or_default()
     }
 
-    pub fn guardar(&self) {
-        self.guardar_en(&Self::ruta());
+    pub fn guardar(&self) -> std::io::Result<()> {
+        self.guardar_en(&Self::ruta())
     }
 
-    pub fn guardar_en(&self, ruta: &Path) {
+    pub fn guardar_en(&self, ruta: &Path) -> std::io::Result<()> {
         if let Some(dir) = ruta.parent() {
-            let _ = std::fs::create_dir_all(dir);
+            std::fs::create_dir_all(dir)?;
         }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(ruta, json);
-        }
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
+        escribir_atomico(ruta, &json)
     }
+}
+
+/// Escribe `contenido` en `ruta` de forma atómica (temporal + rename), para
+/// no dejar el archivo a medias si el proceso se interrumpe a mitad de escritura.
+fn escribir_atomico(ruta: &Path, contenido: &str) -> std::io::Result<()> {
+    let mut nombre = ruta.as_os_str().to_owned();
+    nombre.push(format!(".tmp-{}", std::process::id()));
+    let temporal = PathBuf::from(nombre);
+
+    std::fs::write(&temporal, contenido)?;
+    if let Err(e) = std::fs::rename(&temporal, ruta) {
+        let _ = std::fs::remove_file(&temporal);
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Estado que el daemon reporta al menú a través del comando IPC `status`.
@@ -335,6 +384,8 @@ pub fn gsettings_set(clave: &str, valor: &str) -> bool {
     std::process::Command::new("gsettings")
         .arg("set")
         .args(&partes)
+        // «--» evita que un valor que empiece por «-» se interprete como opción.
+        .arg("--")
         .arg(valor)
         .status()
         .map(|e| e.success())
@@ -388,6 +439,27 @@ pub fn dir_perfiles() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_default()
         .join("wallpaper-animado/perfiles")
+}
+
+/// Comprueba que `nombre` es un nombre de archivo simple: sin directorios,
+/// sin «..» y sin separadores. Evita rutas maliciosas en perfiles manipulados.
+fn nombre_archivo_seguro(nombre: &str) -> bool {
+    matches!(
+        Path::new(nombre)
+            .components()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        [std::path::Component::Normal(_)]
+    )
+}
+
+/// Extensión admitida para la configuración de fastfetch de un perfil.
+fn extension_fastfetch(nombre: &str) -> Option<&'static str> {
+    match Path::new(nombre).extension().and_then(|e| e.to_str()) {
+        Some("json") => Some("json"),
+        Some("jsonc") => Some("jsonc"),
+        _ => None,
+    }
 }
 
 impl Perfil {
@@ -446,7 +518,7 @@ pub fn guardar_perfil(nombre: &str) -> std::io::Result<Perfil> {
     }
 
     let texto = serde_json::to_string_pretty(&perfil).map_err(std::io::Error::other)?;
-    std::fs::write(dir.join("perfil.json"), texto)?;
+    escribir_atomico(&dir.join("perfil.json"), &texto)?;
     Ok(perfil)
 }
 
@@ -483,12 +555,21 @@ pub fn aplicar_perfil(perfil: &Perfil) -> std::io::Result<()> {
     }
 
     if let Some(archivo) = &perfil.fastfetch {
+        // El perfil es un archivo de usuario: nunca confiar en rutas ni extensiones.
+        let Some(ext) = extension_fastfetch(archivo) else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("extensión no admitida en el perfil: {}", archivo),
+            ));
+        };
+        if !nombre_archivo_seguro(archivo) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("nombre de archivo no válido en el perfil: {}", archivo),
+            ));
+        }
         let destino = dirs::config_dir().unwrap_or_default().join("fastfetch");
         std::fs::create_dir_all(&destino)?;
-        let ext = Path::new(archivo)
-            .extension()
-            .map(|e| e.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "jsonc".to_string());
         std::fs::copy(dir.join(format!("fastfetch.{ext}")), destino.join(archivo))?;
     }
 
@@ -593,7 +674,7 @@ pub fn en_bateria() -> bool {
 
 /// Envía un comando al daemon y devuelve la respuesta JSON.
 pub fn ipc(cmd: &serde_json::Value) -> std::io::Result<serde_json::Value> {
-    let mut stream = UnixStream::connect(SOCKET_IPC)?;
+    let mut stream = UnixStream::connect(socket_ipc())?;
     stream.set_read_timeout(Some(Duration::from_secs(2)))?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     stream.write_all(cmd.to_string().as_bytes())?;
@@ -618,7 +699,7 @@ pub fn consultar_estado() -> Option<EstadoDaemon> {
 
 /// Envía un comando sin esperar respuesta.
 pub fn enviar_ipc(cmd: &serde_json::Value) -> std::io::Result<()> {
-    let mut stream = UnixStream::connect(SOCKET_IPC)?;
+    let mut stream = UnixStream::connect(socket_ipc())?;
     stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     stream.write_all(cmd.to_string().as_bytes())?;
     stream.write_all(b"\n")?;
@@ -782,7 +863,7 @@ mod tests {
         cfg.favoritos.push("/tmp/video.mp4".into());
         cfg.fondos_por_monitor
             .insert("HDMI-1".into(), "/tmp/otro.mp4".into());
-        cfg.guardar_en(&ruta);
+        cfg.guardar_en(&ruta).unwrap();
 
         let leida = Config::cargar_de(&ruta);
         assert_eq!(leida, cfg);
@@ -891,5 +972,75 @@ mod tests {
         // Campos opcionales ausentes no rompen el parseo
         let minimo: Perfil = serde_json::from_str(r#"{"nombre": "Simple"}"#).unwrap();
         assert_eq!(minimo.gtk, None);
+    }
+
+    #[test]
+    fn sockets_en_directorio_privado() {
+        let dir = dir_sockets();
+        assert!(dir.ends_with("wallpaper-animado"));
+        assert!(socket_ipc().ends_with("wallpaper-animado/daemon.sock"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let modo = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            assert_eq!(modo, 0o700);
+        }
+    }
+
+    #[test]
+    fn eliminar_socket_solo_borra_sockets() {
+        let dir = dir_temporal("sockets");
+
+        // Un archivo normal no se toca.
+        let archivo = dir.join("dato.txt");
+        std::fs::write(&archivo, b"importante").unwrap();
+        eliminar_socket(&archivo);
+        assert!(archivo.exists());
+
+        // Un symlink tampoco (aunque su destino sea un socket).
+        let enlace = dir.join("enlace");
+        std::os::unix::fs::symlink(&archivo, &enlace).unwrap();
+        eliminar_socket(&enlace);
+        assert!(std::fs::symlink_metadata(&enlace).is_ok());
+
+        // Un socket sí se elimina.
+        let sock = dir.join("daemon.sock");
+        let _listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        eliminar_socket(&sock);
+        assert!(!sock.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn nombres_de_archivo_y_extensiones_de_perfil() {
+        assert!(nombre_archivo_seguro("config.jsonc"));
+        assert!(!nombre_archivo_seguro("../../.bashrc"));
+        assert!(!nombre_archivo_seguro("sub/config.json"));
+        assert!(!nombre_archivo_seguro("/etc/passwd"));
+        assert!(!nombre_archivo_seguro(".."));
+        assert!(!nombre_archivo_seguro(""));
+
+        assert_eq!(extension_fastfetch("config.jsonc"), Some("jsonc"));
+        assert_eq!(extension_fastfetch("config.json"), Some("json"));
+        assert_eq!(extension_fastfetch("config.toml"), None);
+        assert_eq!(extension_fastfetch("sin-extension"), None);
+    }
+
+    #[test]
+    fn escritura_atomica_deja_el_archivo_completo() {
+        let dir = dir_temporal("atomico");
+        let ruta = dir.join("config.json");
+        escribir_atomico(&ruta, r#"{"a":1}"#).unwrap();
+        assert_eq!(std::fs::read_to_string(&ruta).unwrap(), r#"{"a":1}"#);
+
+        // No deben quedar temporales tras un rename correcto.
+        let residuos = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(residuos, 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

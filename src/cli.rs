@@ -102,9 +102,15 @@ fn comando_set(args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     };
 
-    let ruta = std::fs::canonicalize(ruta).unwrap_or_default();
+    let ruta = match std::fs::canonicalize(ruta) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("No se pudo abrir «{}»: {}", ruta, e);
+            return ExitCode::from(1);
+        }
+    };
     if !ruta.is_file() {
-        eprintln!("No existe el archivo: {}", ruta.display());
+        eprintln!("No es un archivo regular: {}", ruta.display());
         return ExitCode::from(1);
     }
     if !core::extension_ok(&ruta) {

@@ -15,9 +15,16 @@ After=graphical-session.target
 [Service]
 Type=simple
 WorkingDirectory=$DIR
-ExecStart=$DIR/target/release/wallpaper-daemon
+ExecStart="$DIR/target/release/wallpaper-daemon"
 Restart=on-failure
 Environment=RUST_LOG=info
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# Endurecimiento: sin privilegios extra, /tmp privado y sistema de solo lectura.
+# La app solo escribe en $HOME (~/.config, ~/.cache) y en $XDG_RUNTIME_DIR.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
 
 [Install]
 WantedBy=default.target
@@ -35,7 +42,7 @@ cat > "$DATA_DIR/applications/wallpaper-animado.desktop" << DESKTOP_EOF
 Type=Application
 Name=Azura
 Comment=Gestiona y aplica fondos de pantalla animados
-Exec=$DIR/target/release/wallpaper-menu
+Exec="$DIR/target/release/wallpaper-menu"
 Icon=wallpaper-animado
 Terminal=false
 Categories=Utility;Graphics;

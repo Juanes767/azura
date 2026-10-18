@@ -6,7 +6,7 @@ use global_hotkey::{
 use ksni::menu::{CheckmarkItem, MenuItem as KsniMenuItem, StandardItem};
 use ksni::ToolTip;
 use std::fs::OpenOptions;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -46,7 +46,7 @@ struct PantallaGeom {
 struct Pantalla {
     nombre: String,
     win_id: u32,
-    socket: String,
+    socket: PathBuf,
     mpv: Mutex<Option<Child>>,
     video_actual: Mutex<Option<PathBuf>>,
 }
@@ -94,7 +94,9 @@ fn main() -> Result<()> {
         .or_else(|| core::encontrar_fondo(&dir))
         .context("no hay fondos disponibles")?;
     config.current_wallpaper = Some(wallpaper.to_string_lossy().into_owned());
-    config.guardar();
+    if let Err(e) = config.guardar() {
+        log::warn!("⚠️  No se pudo guardar la configuración: {}", e);
+    }
     log::info!("🎬 Fondo inicial: {:?}", wallpaper);
 
     if config.autostart {
@@ -150,7 +152,7 @@ fn main() -> Result<()> {
         estado: estado.clone(),
     }) {
         Ok(handle) => {
-            *estado._bandeja.lock().unwrap() = Some(handle);
+            *estado._bandeja.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
             log::info!("📌 Bandeja registrada");
         }
         Err(e) => log::warn!("📌 Sin bandeja del sistema: {}", e),
@@ -193,10 +195,11 @@ fn main() -> Result<()> {
     }
 
     // 8. Servidor IPC (el menú y la bandeja envían comandos aquí)
-    let _ = std::fs::remove_file(core::SOCKET_IPC);
-    let listener = UnixListener::bind(core::SOCKET_IPC)?;
-    let _ = std::fs::set_permissions(core::SOCKET_IPC, std::fs::Permissions::from_mode(0o600));
-    log::info!("🔌 IPC en {}", core::SOCKET_IPC);
+    let socket_ipc = core::socket_ipc();
+    core::eliminar_socket(&socket_ipc);
+    let listener = UnixListener::bind(&socket_ipc)?;
+    let _ = std::fs::set_permissions(&socket_ipc, std::fs::Permissions::from_mode(0o600));
+    log::info!("🔌 IPC en {}", socket_ipc.display());
 
     for stream in listener.incoming() {
         match stream {
@@ -385,15 +388,11 @@ fn relayout(conn: &RustConnection, estado: &Estado) {
 
 // ── mpv ────────────────────────────────────────────────────────
 
-fn socket_mpv(indice: usize) -> String {
-    if indice == 0 {
-        "/tmp/wallpaper-mpv.sock".into()
-    } else {
-        format!("/tmp/wallpaper-mpv-{}.sock", indice)
-    }
+fn socket_mpv(indice: usize) -> PathBuf {
+    core::dir_sockets().join(format!("mpv-{}.sock", indice))
 }
 
-fn enviar_mpv(socket: &str, cmd: &str) -> Result<()> {
+fn enviar_mpv(socket: &Path, cmd: &str) -> Result<()> {
     let mut stream = UnixStream::connect(socket).context("no se pudo conectar al socket de mpv")?;
     stream.write_all(cmd.as_bytes())?;
     stream.write_all(b"\n")?;
@@ -414,7 +413,7 @@ fn pausa_mpv(pausar: bool) -> &'static str {
     }
 }
 
-fn cargar_video(socket: &str, video: &Path) {
+fn cargar_video(socket: &Path, video: &Path) {
     let json = serde_json::json!({
         "command": ["loadfile", video.to_string_lossy(), "replace"]
     });
@@ -424,7 +423,7 @@ fn cargar_video(socket: &str, video: &Path) {
 /// Carga un vídeo en la pantalla y recuerda cuál está reproduciendo.
 fn poner_video(p: &Pantalla, video: &Path) {
     cargar_video(&p.socket, video);
-    *p.video_actual.lock().unwrap() = Some(video.to_path_buf());
+    *p.video_actual.lock().unwrap_or_else(|e| e.into_inner()) = Some(video.to_path_buf());
 }
 
 /// Fondo que corresponde a una pantalla: su override o el global.
@@ -436,7 +435,7 @@ fn fondo_de_pantalla(cfg: &Config, nombre: &str) -> Option<PathBuf> {
 }
 
 fn matar_mpv(p: &Pantalla) {
-    if let Some(mut hijo) = p.mpv.lock().unwrap().take() {
+    if let Some(mut hijo) = p.mpv.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = hijo.kill();
         let _ = hijo.wait();
     }
@@ -446,11 +445,11 @@ fn matar_mpv(p: &Pantalla) {
 fn relanzar_pantalla_mpv(cfg: &Config, p: &Pantalla, pausado: bool) -> Result<()> {
     let video = fondo_de_pantalla(cfg, &p.nombre).context("sin fondo para la pantalla")?;
     matar_mpv(p);
-    let _ = std::fs::remove_file(&p.socket);
+    core::eliminar_socket(&p.socket);
     let child = lanzar_mpv(p.win_id, &p.socket, &video, cfg.fps_limit)?;
     log::info!("🎥 mpv «{}» PID {} → {:?}", p.nombre, child.id(), video);
-    *p.mpv.lock().unwrap() = Some(child);
-    *p.video_actual.lock().unwrap() = Some(video.clone());
+    *p.mpv.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+    *p.video_actual.lock().unwrap_or_else(|e| e.into_inner()) = Some(video.clone());
     if pausado {
         thread::sleep(Duration::from_millis(300));
         let _ = enviar_mpv(&p.socket, pausa_mpv(true));
@@ -458,11 +457,11 @@ fn relanzar_pantalla_mpv(cfg: &Config, p: &Pantalla, pausado: bool) -> Result<()
     Ok(())
 }
 
-fn lanzar_mpv(win_id: u32, socket: &str, video: &Path, fps_limit: u32) -> Result<Child> {
+fn lanzar_mpv(win_id: u32, socket: &Path, video: &Path, fps_limit: u32) -> Result<Child> {
     let mut cmd = Command::new("mpv");
     cmd.args([
         &format!("--wid={}", win_id),
-        &format!("--input-ipc-server={}", socket),
+        &format!("--input-ipc-server={}", socket.display()),
         "--no-audio",
         "--loop-file=inf",
         "--no-osc",
@@ -491,14 +490,20 @@ fn lanzar_mpv(win_id: u32, socket: &str, video: &Path, fps_limit: u32) -> Result
 fn aplicar_global(estado: &Estado, video: &Path) {
     let pausado = estado.pausa_manual.load(Ordering::Relaxed);
     {
-        let mut cfg = estado.config.lock().unwrap();
+        let mut cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.current_wallpaper = Some(video.to_string_lossy().into_owned());
         cfg.fondos_por_monitor.clear();
-        cfg.guardar();
+        if let Err(e) = cfg.guardar() {
+            log::warn!("no se pudo guardar la configuración: {}", e);
+        }
     }
     for p in &estado.pantallas {
-        if p.mpv.lock().unwrap().is_none() {
-            let cfg = estado.config.lock().unwrap().clone();
+        if p.mpv.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+            let cfg = estado
+                .config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             let _ = relanzar_pantalla_mpv(&cfg, p, pausado);
         } else {
             poner_video(p, video);
@@ -518,13 +523,24 @@ fn aplicar_monitor(estado: &Estado, monitor: &str, video: &Path) -> Result<()> {
         .with_context(|| format!("monitor desconocido: {}", monitor))?;
     let pausado = estado.pausa_manual.load(Ordering::Relaxed);
     {
-        let mut cfg = estado.config.lock().unwrap();
+        let mut cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.fondos_por_monitor
             .insert(monitor.to_string(), video.to_string_lossy().into_owned());
-        cfg.guardar();
+        if let Err(e) = cfg.guardar() {
+            log::warn!("no se pudo guardar la configuración: {}", e);
+        }
     }
-    if pantalla.mpv.lock().unwrap().is_none() {
-        let cfg = estado.config.lock().unwrap().clone();
+    if pantalla
+        .mpv
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .is_none()
+    {
+        let cfg = estado
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         relanzar_pantalla_mpv(&cfg, pantalla, pausado)?;
     } else {
         poner_video(pantalla, video);
@@ -539,20 +555,26 @@ fn aplicar_monitor(estado: &Estado, monitor: &str, video: &Path) -> Result<()> {
 fn aplicar_automatico(estado: &Estado, video: &Path) {
     let pausado = estado.pausa_manual.load(Ordering::Relaxed);
     {
-        let mut cfg = estado.config.lock().unwrap();
+        let mut cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
         cfg.current_wallpaper = Some(video.to_string_lossy().into_owned());
-        cfg.guardar();
+        if let Err(e) = cfg.guardar() {
+            log::warn!("no se pudo guardar la configuración: {}", e);
+        }
     }
     for p in &estado.pantallas {
         let con_override = {
-            let cfg = estado.config.lock().unwrap();
+            let cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
             cfg.fondos_por_monitor.contains_key(&p.nombre)
         };
         if con_override {
             continue;
         }
-        if p.mpv.lock().unwrap().is_none() {
-            let cfg = estado.config.lock().unwrap().clone();
+        if p.mpv.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
+            let cfg = estado
+                .config
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             let _ = relanzar_pantalla_mpv(&cfg, p, pausado);
         } else {
             poner_video(p, video);
@@ -562,7 +584,7 @@ fn aplicar_automatico(estado: &Estado, video: &Path) {
         let cmd = pausa_mpv(false);
         for p in &estado.pantallas {
             let con_override = {
-                let cfg = estado.config.lock().unwrap();
+                let cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
                 cfg.fondos_por_monitor.contains_key(&p.nombre)
             };
             if !con_override {
@@ -576,12 +598,14 @@ fn aplicar_automatico(estado: &Estado, video: &Path) {
 fn quitar_fondo(estado: &Estado) {
     for p in &estado.pantallas {
         matar_mpv(p);
-        *p.video_actual.lock().unwrap() = None;
+        *p.video_actual.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
-    let mut cfg = estado.config.lock().unwrap();
+    let mut cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
     cfg.current_wallpaper = None;
     cfg.fondos_por_monitor.clear();
-    cfg.guardar();
+    if let Err(e) = cfg.guardar() {
+        log::warn!("no se pudo guardar la configuración: {}", e);
+    }
 }
 
 fn alternar_pausa(estado: &Estado, pausar: bool) {
@@ -597,10 +621,14 @@ fn sincronizar_pantallas(estado: &Estado, cfg: &Config) {
     let pausado = estado.pausa_manual.load(Ordering::Relaxed);
     for p in &estado.pantallas {
         let esperado = fondo_de_pantalla(cfg, &p.nombre);
-        let actual = p.video_actual.lock().unwrap().clone();
+        let actual = p
+            .video_actual
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         match esperado {
             Some(video) if actual.as_deref() != Some(video.as_path()) => {
-                if p.mpv.lock().unwrap().is_none() {
+                if p.mpv.lock().unwrap_or_else(|e| e.into_inner()).is_none() {
                     let _ = relanzar_pantalla_mpv(cfg, p, pausado);
                 } else {
                     poner_video(p, &video);
@@ -609,12 +637,14 @@ fn sincronizar_pantallas(estado: &Estado, cfg: &Config) {
                     }
                 }
             }
-            None if actual.is_some() || p.mpv.lock().unwrap().is_some() => {
-                if let Some(mut hijo) = p.mpv.lock().unwrap().take() {
+            None if actual.is_some()
+                || p.mpv.lock().unwrap_or_else(|e| e.into_inner()).is_some() =>
+            {
+                if let Some(mut hijo) = p.mpv.lock().unwrap_or_else(|e| e.into_inner()).take() {
                     let _ = hijo.kill();
                     let _ = hijo.wait();
                 }
-                *p.video_actual.lock().unwrap() = None;
+                *p.video_actual.lock().unwrap_or_else(|e| e.into_inner()) = None;
             }
             _ => {}
         }
@@ -642,7 +672,12 @@ fn fondo_aleatorio(video_actual: Option<&str>, fondos: &[PathBuf]) -> Option<Pat
 
 /// Pasa al siguiente fondo (con notificación opcional).
 fn avanzar_siguiente(estado: &Estado, notificar: bool) {
-    let actual = estado.config.lock().unwrap().current_wallpaper.clone();
+    let actual = estado
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .current_wallpaper
+        .clone();
     if let Some(video) = core::siguiente_fondo(&estado.dir, actual.as_deref()) {
         aplicar_global(estado, &video);
         if notificar {
@@ -653,7 +688,12 @@ fn avanzar_siguiente(estado: &Estado, notificar: bool) {
 
 /// Aplica un fondo al azar (con notificación opcional).
 fn avanzar_aleatorio(estado: &Estado, notificar: bool) {
-    let actual = estado.config.lock().unwrap().current_wallpaper.clone();
+    let actual = estado
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .current_wallpaper
+        .clone();
     let fondos = core::listar_fondos(&estado.dir);
     if let Some(video) = fondo_aleatorio(actual.as_deref(), &fondos) {
         aplicar_global(estado, &video);
@@ -807,7 +847,11 @@ fn vigilar_ventanas(conn: RustConnection, estado: Arc<Estado>) -> Result<()> {
             }
         }
 
-        let config = estado.config.lock().unwrap().clone();
+        let config = estado
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
 
         // 1. Ventana con foco de entrada (_NET_ACTIVE_WINDOW)
         let activa: u32 = leer_prop_u32(&conn, root, active_atom, AtomEnum::WINDOW, 1)
@@ -899,7 +943,7 @@ fn vigilar_mpv(estado: Arc<Estado>) {
         }
         for p in &estado.pantallas {
             let muerto = {
-                let mut guard = p.mpv.lock().unwrap();
+                let mut guard = p.mpv.lock().unwrap_or_else(|e| e.into_inner());
                 match guard.as_mut() {
                     Some(hijo) => match hijo.try_wait() {
                         Ok(Some(estado_salida)) => {
@@ -923,7 +967,11 @@ fn vigilar_mpv(estado: Arc<Estado>) {
             };
             if muerto {
                 let (cfg, pausado) = {
-                    let cfg = estado.config.lock().unwrap().clone();
+                    let cfg = estado
+                        .config
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone();
                     let pausado = estado.pausa_manual.load(Ordering::Relaxed);
                     (cfg, pausado)
                 };
@@ -945,7 +993,7 @@ fn slideshow_loop(estado: Arc<Estado>) -> Result<()> {
         thread::sleep(Duration::from_secs(10));
 
         let (habilitado, intervalo_min, aleatorio, actual) = {
-            let cfg = estado.config.lock().unwrap();
+            let cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
             (
                 cfg.slideshow,
                 cfg.slideshow_minutos.max(1) as u64,
@@ -1039,27 +1087,39 @@ fn registrar_hotkeys(estado: &Arc<Estado>) {
     };
 
     let (preferido_menu, preferido_siguiente) = {
-        let cfg = estado.config.lock().unwrap();
+        let cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
         (cfg.hotkey.clone(), cfg.hotkey_siguiente.clone())
     };
 
     let mut registrados = Vec::new();
     if let Some((hk, desc)) = intentar_registrar(&manager, &preferido_menu) {
         log::info!("⌨️  Atajo menú: {}", desc);
-        *estado.hotkey_activo.lock().unwrap() = desc;
+        *estado
+            .hotkey_activo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = desc;
         registrados.push((hk, Accion::Menu));
     } else {
-        *estado.hotkey_activo.lock().unwrap() = "Ninguno".into();
+        *estado
+            .hotkey_activo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = "Ninguno".into();
         log::warn!("⚠️  Sin atajo para abrir el menú");
     }
     if let Some((hk, desc)) = intentar_registrar(&manager, &preferido_siguiente) {
         log::info!("⌨️  Atajo siguiente: {}", desc);
-        *estado.hotkey_siguiente_activo.lock().unwrap() = desc;
+        *estado
+            .hotkey_siguiente_activo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = desc;
         registrados.push((hk, Accion::Siguiente));
     } else {
-        *estado.hotkey_siguiente_activo.lock().unwrap() = "Ninguno".into();
+        *estado
+            .hotkey_siguiente_activo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = "Ninguno".into();
     }
-    *estado.hotkeys.lock().unwrap() = registrados;
+    *estado.hotkeys.lock().unwrap_or_else(|e| e.into_inner()) = registrados;
 
     let _ = MANAGER_GUARD.set(manager);
 
@@ -1074,7 +1134,7 @@ fn registrar_hotkeys(estado: &Arc<Estado>) {
                 let accion = estado2
                     .hotkeys
                     .lock()
-                    .unwrap()
+                    .unwrap_or_else(|e| e.into_inner())
                     .iter()
                     .find(|(hk, _)| hk.id() == event.id)
                     .map(|(_, a)| *a);
@@ -1100,7 +1160,7 @@ fn reregistrar_hotkeys(estado: &Estado, menu_id: &str, siguiente_id: &str) {
         return;
     };
     {
-        let mut guard = estado.hotkeys.lock().unwrap();
+        let mut guard = estado.hotkeys.lock().unwrap_or_else(|e| e.into_inner());
         for (hk, _) in guard.drain(..) {
             let _ = manager.unregister(hk);
         }
@@ -1108,23 +1168,61 @@ fn reregistrar_hotkeys(estado: &Estado, menu_id: &str, siguiente_id: &str) {
 
     let mut registrados = Vec::new();
     if let Some((hk, desc)) = intentar_registrar(manager, menu_id) {
-        *estado.hotkey_activo.lock().unwrap() = desc.clone();
+        *estado
+            .hotkey_activo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = desc.clone();
         log::info!("⌨️  Atajo menú cambiado a: {}", desc);
         registrados.push((hk, Accion::Menu));
     } else {
-        *estado.hotkey_activo.lock().unwrap() = "Ninguno".into();
+        *estado
+            .hotkey_activo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = "Ninguno".into();
     }
     if let Some((hk, desc)) = intentar_registrar(manager, siguiente_id) {
-        *estado.hotkey_siguiente_activo.lock().unwrap() = desc.clone();
+        *estado
+            .hotkey_siguiente_activo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = desc.clone();
         log::info!("⌨️  Atajo siguiente cambiado a: {}", desc);
         registrados.push((hk, Accion::Siguiente));
     } else {
-        *estado.hotkey_siguiente_activo.lock().unwrap() = "Ninguno".into();
+        *estado
+            .hotkey_siguiente_activo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = "Ninguno".into();
     }
-    *estado.hotkeys.lock().unwrap() = registrados;
+    *estado.hotkeys.lock().unwrap_or_else(|e| e.into_inner()) = registrados;
 }
 
 // ── IPC ────────────────────────────────────────────────────────
+
+/// Tamaño máximo de un mensaje IPC (la petición es una única línea JSON).
+const MAX_MENSAJE_IPC: u64 = 64 * 1024;
+
+/// UID del proceso conectado al otro lado del socket (SO_PEERCRED).
+fn uid_del_cliente(stream: &UnixStream) -> std::io::Result<libc::uid_t> {
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut longitud = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut libc::ucred as *mut libc::c_void,
+            &mut longitud,
+        )
+    };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(cred.uid)
+}
 
 #[derive(serde::Deserialize)]
 struct Comando {
@@ -1137,10 +1235,23 @@ struct Comando {
 fn manejar_cliente(stream: UnixStream, estado: &Arc<Estado>) -> Result<()> {
     // Sin timeout, un cliente que conecte y nunca envíe nada bloquearía el IPC completo.
     let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+
+    // Solo aceptamos clientes del mismo usuario que ejecuta el daemon.
+    match uid_del_cliente(&stream) {
+        Ok(uid) if uid == unsafe { libc::getuid() } => {}
+        Ok(_) => anyhow::bail!("cliente de otro usuario rechazado"),
+        Err(e) => anyhow::bail!("no se pudo verificar el cliente: {}", e),
+    }
+
     let mut escritor = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
     let mut buf = String::new();
-    reader.read_line(&mut buf)?;
+    // Límite de tamaño: sin él, un cliente podría agotar la memoria del daemon.
+    (&mut reader).take(MAX_MENSAJE_IPC).read_line(&mut buf)?;
+    if buf.len() as u64 >= MAX_MENSAJE_IPC && !buf.ends_with('\n') {
+        anyhow::bail!("mensaje IPC demasiado largo");
+    }
     log::debug!("📨 IPC: {}", buf.trim());
 
     let (respuesta, salir) = match serde_json::from_str::<Comando>(&buf) {
@@ -1159,7 +1270,7 @@ fn manejar_cliente(stream: UnixStream, estado: &Arc<Estado>) -> Result<()> {
 
     if salir {
         log::info!("👋 Saliendo por petición");
-        limpiar_sockets(estado);
+        limpiar_salida(estado);
         std::process::exit(0);
     }
     Ok(())
@@ -1169,13 +1280,21 @@ fn ejecutar(cmd: Comando, estado: &Arc<Estado>) -> serde_json::Value {
     match cmd.cmd.as_str() {
         "ping" => serde_json::json!({ "ok": true }),
         "status" => {
-            let cfg = estado.config.lock().unwrap();
+            let cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
             let estado_daemon = EstadoDaemon {
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 wallpaper: cfg.current_wallpaper.clone(),
                 pausa_manual: estado.pausa_manual.load(Ordering::Relaxed),
-                hotkey: estado.hotkey_activo.lock().unwrap().clone(),
-                hotkey_siguiente: estado.hotkey_siguiente_activo.lock().unwrap().clone(),
+                hotkey: estado
+                    .hotkey_activo
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
+                hotkey_siguiente: estado
+                    .hotkey_siguiente_activo
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
                 pantalla_bloqueada: estado.pantalla_bloqueada.load(Ordering::Relaxed),
                 mpv_disponible: estado.mpv_disponible,
                 ffmpeg_disponible: estado.ffmpeg_disponible,
@@ -1195,8 +1314,14 @@ fn ejecutar(cmd: Comando, estado: &Arc<Estado>) -> serde_json::Value {
                 return serde_json::json!({ "ok": false, "error": "falta path" });
             };
             let video = PathBuf::from(&path);
-            if !video.exists() {
-                return serde_json::json!({ "ok": false, "error": "el archivo no existe" });
+            if !video.is_file() {
+                return serde_json::json!({
+                    "ok": false,
+                    "error": "el archivo no existe o no es un archivo regular"
+                });
+            }
+            if !core::extension_ok(&video) {
+                return serde_json::json!({ "ok": false, "error": "formato no soportado" });
             }
             log::info!("🎬 Cambiando a {} (monitor: {:?})", path, cmd.monitor);
             match cmd.monitor {
@@ -1257,7 +1382,7 @@ fn ejecutar(cmd: Comando, estado: &Arc<Estado>) -> serde_json::Value {
         }
         "quit" => {
             log::info!("👋 Saliendo por petición");
-            limpiar_sockets(estado);
+            limpiar_salida(estado);
             std::process::exit(0);
         }
         otro => {
@@ -1275,7 +1400,7 @@ fn guardar_config(estado: &Arc<Estado>, nueva: Config) {
     let (hotkey_nueva, hotkey_siguiente_nueva);
     let autostart_anterior;
     {
-        let mut cfg = estado.config.lock().unwrap();
+        let mut cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
         fps_anterior = cfg.fps_limit;
         hotkey_anterior = cfg.hotkey.clone();
         hotkey_siguiente_anterior = cfg.hotkey_siguiente.clone();
@@ -1290,12 +1415,18 @@ fn guardar_config(estado: &Arc<Estado>, nueva: Config) {
         fps_nueva = cfg.fps_limit;
         hotkey_nueva = cfg.hotkey.clone();
         hotkey_siguiente_nueva = cfg.hotkey_siguiente.clone();
-        cfg.guardar();
+        if let Err(e) = cfg.guardar() {
+            log::warn!("no se pudo guardar la configuración: {}", e);
+        }
     }
 
     // Autostart: crear/eliminar .desktop
     if let Ok(exe) = std::env::current_exe() {
-        let autostart = estado.config.lock().unwrap().autostart;
+        let autostart = estado
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .autostart;
         if autostart != autostart_anterior || autostart {
             core::aplicar_autostart(autostart, &exe);
         }
@@ -1313,7 +1444,11 @@ fn guardar_config(estado: &Arc<Estado>, nueva: Config) {
             fps_anterior,
             fps_nueva
         );
-        let cfg = estado.config.lock().unwrap().clone();
+        let cfg = estado
+            .config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let pausado = estado.pausa_manual.load(Ordering::Relaxed);
         for p in &estado.pantallas {
             if fondo_de_pantalla(&cfg, &p.nombre).is_some() {
@@ -1323,14 +1458,23 @@ fn guardar_config(estado: &Arc<Estado>, nueva: Config) {
     }
 
     // Aplicar posibles cambios de overrides por monitor o fondo global
-    let cfg = estado.config.lock().unwrap().clone();
+    let cfg = estado
+        .config
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
     sincronizar_pantallas(estado, &cfg);
 }
 
-fn limpiar_sockets(estado: &Estado) {
-    let _ = std::fs::remove_file(core::SOCKET_IPC);
+/// Detiene los reproductores mpv y elimina los sockets al salir,
+/// para no dejar procesos huérfanos reproduciendo sobre el escritorio.
+fn limpiar_salida(estado: &Estado) {
     for p in &estado.pantallas {
-        let _ = std::fs::remove_file(&p.socket);
+        matar_mpv(p);
+    }
+    core::eliminar_socket(&core::socket_ipc());
+    for p in &estado.pantallas {
+        core::eliminar_socket(&p.socket);
     }
 }
 
@@ -1377,7 +1521,7 @@ impl ksni::Tray for Bandeja {
     }
 
     fn tool_tip(&self) -> ToolTip {
-        let cfg = self.estado.config.lock().unwrap();
+        let cfg = self.estado.config.lock().unwrap_or_else(|e| e.into_inner());
         let descripcion = cfg
             .current_wallpaper
             .as_ref()
@@ -1435,7 +1579,7 @@ impl ksni::Tray for Bandeja {
                 label: "Salir".into(),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|this: &mut Self| {
-                    limpiar_sockets(&this.estado);
+                    limpiar_salida(&this.estado);
                     std::process::exit(0);
                 }),
                 ..Default::default()
