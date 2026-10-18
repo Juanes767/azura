@@ -1,0 +1,19 @@
+[Unit]
+Description=Fondos de pantalla animados (Azura)
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/wallpaper-daemon
+Restart=on-failure
+Environment=RUST_LOG=info
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+# Endurecimiento: sin privilegios extra, /tmp privado y sistema de solo lectura.
+# La app solo escribe en $HOME (~/.config, ~/.cache) y en $XDG_RUNTIME_DIR.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

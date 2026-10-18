@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  deb:
+    name: Paquete .deb y publicación
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias del sistema (GTK 4)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libxkbcommon-dev
+
+      - name: Toolchain de Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Caché de Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Construir el paquete
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb
+
+      - name: Sumas de verificación
+        run: |
+          cd target/debian
+          sha256sum *.deb > SHA256SUMS
+
+      - name: Publicar la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            target/debian/*.deb target/debian/SHA256SUMS \
+            --generate-notes \
+            --title "Azura $GITHUB_REF_NAME"

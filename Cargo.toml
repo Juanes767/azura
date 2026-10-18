@@ -22,6 +22,38 @@ path = "src/menu.rs"
 name = "wallpaper-animado"
 path = "src/cli.rs"
 
+[package.metadata.deb]
+name = "wallpaper-animado"
+maintainer = "Juanes767 <Juanes767@users.noreply.github.com>"
+copyright = "2026, Juanes767"
+license-file = ["LICENSE"]
+section = "utils"
+priority = "optional"
+depends = "libgtk-4-1, libxkbcommon0, mpv, ffmpeg"
+extended-description = """
+Azura reproduce vídeos e imágenes como fondo de pantalla en X11 (Cinnamon),
+con biblioteca, miniaturas, pausas inteligentes, multi-monitor, atajos
+globales, perfiles de temas del sistema y línea de comandos.
+
+El paquete instala los binarios, los iconos, el lanzador «Azura» y la
+unidad de usuario wallpaper-animado.service. Tras instalar, actívala con:
+  systemctl --user enable --now wallpaper-animado
+"""
+assets = [
+    ["target/release/wallpaper-daemon", "usr/bin/", "755"],
+    ["target/release/wallpaper-menu", "usr/bin/", "755"],
+    ["target/release/wallpaper-animado", "usr/bin/", "755"],
+    ["packaging/wallpaper-animado.desktop", "usr/share/applications/", "644"],
+    ["packaging/wallpaper-animado.service", "usr/lib/systemd/user/", "644"],
+    ["assets/icons/hicolor/16x16/apps/*", "usr/share/icons/hicolor/16x16/apps/", "644"],
+    ["assets/icons/hicolor/24x24/apps/*", "usr/share/icons/hicolor/24x24/apps/", "644"],
+    ["assets/icons/hicolor/32x32/apps/*", "usr/share/icons/hicolor/32x32/apps/", "644"],
+    ["assets/icons/hicolor/48x48/apps/*", "usr/share/icons/hicolor/48x48/apps/", "644"],
+    ["assets/icons/hicolor/64x64/apps/*", "usr/share/icons/hicolor/64x64/apps/", "644"],
+    ["assets/icons/hicolor/256x256/apps/*", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["assets/icon.png", "usr/share/icons/hicolor/512x512/apps/wallpaper-animado.png", "644"],
+]
+
 [dependencies]
 gtk4 = { version = "0.9", features = ["v4_12"] }
 gdk4-x11 = "0.9"

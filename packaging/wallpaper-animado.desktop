@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Azura
+Comment=Gestiona y aplica fondos de pantalla animados
+Exec=wallpaper-menu
+Icon=wallpaper-animado
+Terminal=false
+Categories=Utility;Graphics;
+Keywords=fondo;wallpaper;animado;pantalla;azura;
+StartupWMClass=com.mint.wallpaper-animado
