@@ -1,0 +1,9 @@
+# Artefactos de compilación
+/target
+
+# Sockets de la app
+*.sock
+
+# Medios de ejemplo (no versionar binarios grandes)
+assets/wallpapers/*
+!assets/wallpapers/.gitkeep
