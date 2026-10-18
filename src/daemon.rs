@@ -93,7 +93,9 @@ fn main() -> Result<()> {
         .filter(|p| p.exists() && core::extension_ok(p))
         .or_else(|| core::encontrar_fondo(&dir))
         .context("no hay fondos disponibles")?;
-    config.current_wallpaper = Some(wallpaper.to_string_lossy().into_owned());
+    let ruta_inicial = wallpaper.to_string_lossy().into_owned();
+    core::registrar_historial(&mut config, &ruta_inicial);
+    config.current_wallpaper = Some(ruta_inicial);
     if let Err(e) = config.guardar() {
         log::warn!("⚠️  No se pudo guardar la configuración: {}", e);
     }
@@ -556,7 +558,9 @@ fn aplicar_global(estado: &Estado, video: &Path) {
     let pausado = estado.pausa_manual.load(Ordering::Relaxed);
     {
         let mut cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
-        cfg.current_wallpaper = Some(video.to_string_lossy().into_owned());
+        let ruta = video.to_string_lossy().into_owned();
+        core::registrar_historial(&mut cfg, &ruta);
+        cfg.current_wallpaper = Some(ruta);
         cfg.fondos_por_monitor.clear();
         if let Err(e) = cfg.guardar() {
             log::warn!("no se pudo guardar la configuración: {}", e);
@@ -629,7 +633,9 @@ fn aplicar_automatico(estado: &Estado, video: &Path) {
     let pausado = estado.pausa_manual.load(Ordering::Relaxed);
     {
         let mut cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
-        cfg.current_wallpaper = Some(video.to_string_lossy().into_owned());
+        let ruta = video.to_string_lossy().into_owned();
+        core::registrar_historial(&mut cfg, &ruta);
+        cfg.current_wallpaper = Some(ruta);
         if let Err(e) = cfg.guardar() {
             log::warn!("no se pudo guardar la configuración: {}", e);
         }
@@ -740,23 +746,17 @@ fn sincronizar_pantallas(estado: &Estado, cfg: &Config) {
     }
 }
 
-fn fondo_aleatorio(video_actual: Option<&str>, fondos: &[PathBuf]) -> Option<PathBuf> {
-    let candidatos: Vec<&PathBuf> = fondos
-        .iter()
-        .filter(|p| {
-            video_actual
-                .map(|a| p.to_string_lossy() != a)
-                .unwrap_or(true)
-        })
-        .collect();
-    if candidatos.is_empty() {
-        return fondos.first().cloned();
+/// Fondos de la rotación: los de la colección activa si tiene alguno, si no
+/// toda la biblioteca.
+fn fondos_de_rotacion(estado: &Estado) -> Vec<PathBuf> {
+    let cfg = estado.config.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(nombre) = cfg.coleccion_activa.as_deref() {
+        let de_coleccion = core::rutas_de_coleccion(&cfg, nombre);
+        if !de_coleccion.is_empty() {
+            return de_coleccion;
+        }
     }
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0) as usize;
-    Some(candidatos[nanos % candidatos.len()].clone())
+    core::listar_fondos(&estado.dir)
 }
 
 /// Pasa al siguiente fondo (con notificación opcional).
@@ -767,7 +767,8 @@ fn avanzar_siguiente(estado: &Estado, notificar: bool) {
         .unwrap_or_else(|e| e.into_inner())
         .current_wallpaper
         .clone();
-    if let Some(video) = core::siguiente_fondo(&estado.dir, actual.as_deref()) {
+    let fondos = fondos_de_rotacion(estado);
+    if let Some(video) = core::siguiente_de_lista(&fondos, actual.as_deref(), false) {
         aplicar_global(estado, &video);
         if notificar {
             notificar_fondo(&video);
@@ -783,8 +784,8 @@ fn avanzar_aleatorio(estado: &Estado, notificar: bool) {
         .unwrap_or_else(|e| e.into_inner())
         .current_wallpaper
         .clone();
-    let fondos = core::listar_fondos(&estado.dir);
-    if let Some(video) = fondo_aleatorio(actual.as_deref(), &fondos) {
+    let fondos = fondos_de_rotacion(estado);
+    if let Some(video) = core::siguiente_de_lista(&fondos, actual.as_deref(), true) {
         aplicar_global(estado, &video);
         if notificar {
             notificar_fondo(&video);
@@ -1105,16 +1106,12 @@ fn slideshow_loop(estado: Arc<Estado>) -> Result<()> {
             continue;
         }
 
-        let fondos = core::listar_fondos(&estado.dir);
+        let fondos = fondos_de_rotacion(&estado);
         if fondos.is_empty() {
             continue;
         }
 
-        let elegido = if aleatorio {
-            fondo_aleatorio(actual.as_deref(), &fondos)
-        } else {
-            core::siguiente_fondo(&estado.dir, actual.as_deref())
-        };
+        let elegido = core::siguiente_de_lista(&fondos, actual.as_deref(), aleatorio);
 
         if let Some(video) = elegido {
             log::info!("🔄 Slideshow: cambiando a {:?}", video);

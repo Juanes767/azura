@@ -1,6 +1,6 @@
 // Lógica compartida entre el daemon y el menú
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -107,6 +107,19 @@ pub struct Config {
     pub etiquetas: HashMap<String, Vec<String>>,
     /// Fondo fijado por monitor (nombre del monitor → ruta)
     pub fondos_por_monitor: HashMap<String, String>,
+    /// Últimos fondos aplicados, el más reciente primero
+    pub historial: Vec<EntradaHistorial>,
+    /// Colecciones con nombre (nombre → rutas)
+    pub colecciones: BTreeMap<String, Vec<String>>,
+    /// Colección usada por la rotación automática (None = toda la biblioteca)
+    pub coleccion_activa: Option<String>,
+}
+
+/// Un fondo aplicado, con la fecha en que se usó (segundos desde epoch).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EntradaHistorial {
+    pub ruta: String,
+    pub fecha: u64,
 }
 
 impl Default for Config {
@@ -133,6 +146,9 @@ impl Default for Config {
             orden_manual: Vec::new(),
             etiquetas: HashMap::new(),
             fondos_por_monitor: HashMap::new(),
+            historial: Vec::new(),
+            colecciones: BTreeMap::new(),
+            coleccion_activa: None,
         }
     }
 }
@@ -770,6 +786,146 @@ pub fn siguiente_fondo(dir: &Path, actual: Option<&str>) -> Option<PathBuf> {
     Some(fondos[(idx + 1) % fondos.len()].clone())
 }
 
+/// Número máximo de entradas del historial.
+pub const HISTORIAL_MAX: usize = 30;
+
+/// Entero pseudoaleatorio en `[0, n)` derivado del reloj (sin dependencias).
+pub fn aleatorio(n: usize) -> usize {
+    let mut estado = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    estado ^= estado << 13;
+    estado ^= estado >> 7;
+    estado ^= estado << 17;
+    estado as usize % n.max(1)
+}
+
+/// Registra un fondo aplicado en el historial (el más reciente primero).
+pub fn registrar_historial(cfg: &mut Config, ruta: &str) {
+    let fecha = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    cfg.historial.retain(|e| e.ruta != ruta);
+    cfg.historial.insert(
+        0,
+        EntradaHistorial {
+            ruta: ruta.to_string(),
+            fecha,
+        },
+    );
+    cfg.historial.truncate(HISTORIAL_MAX);
+}
+
+/// Siguiente fondo de una lista: cíclico tras `actual`, o al azar si
+/// `aleatorio` (evitando repetir el actual cuando hay más de uno).
+pub fn siguiente_de_lista(
+    fondos: &[PathBuf],
+    actual: Option<&str>,
+    al_azar: bool,
+) -> Option<PathBuf> {
+    if fondos.is_empty() {
+        return None;
+    }
+    if al_azar {
+        if fondos.len() == 1 {
+            return Some(fondos[0].clone());
+        }
+        let candidatos: Vec<&PathBuf> = fondos
+            .iter()
+            .filter(|p| actual.map(|a| p.to_string_lossy() != a).unwrap_or(true))
+            .collect();
+        let idx = aleatorio(candidatos.len());
+        return Some(candidatos[idx].clone());
+    }
+    let idx = actual
+        .and_then(|a| fondos.iter().position(|p| p.to_string_lossy() == a))
+        .unwrap_or(fondos.len() - 1);
+    Some(fondos[(idx + 1) % fondos.len()].clone())
+}
+
+/// Rutas de una colección que aún existen en disco.
+pub fn rutas_de_coleccion(cfg: &Config, nombre: &str) -> Vec<PathBuf> {
+    cfg.colecciones
+        .get(nombre)
+        .map(|rutas| {
+            rutas
+                .iter()
+                .map(PathBuf::from)
+                .filter(|p| p.exists())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Elimina de favoritos, etiquetas, colecciones, historial y orden manual
+/// las referencias a archivos que ya no existen. Devuelve cuántas quitó.
+pub fn limpiar_referencias(cfg: &mut Config) -> usize {
+    let mut quitadas = 0;
+    let existe = |r: &String| Path::new(r).exists();
+
+    let antes = cfg.favoritos.len();
+    cfg.favoritos.retain(existe);
+    quitadas += antes - cfg.favoritos.len();
+
+    let antes = cfg.etiquetas.len();
+    cfg.etiquetas.retain(|r, _| existe(r));
+    quitadas += antes - cfg.etiquetas.len();
+
+    for rutas in cfg.colecciones.values_mut() {
+        let antes = rutas.len();
+        rutas.retain(existe);
+        quitadas += antes - rutas.len();
+    }
+    cfg.colecciones.retain(|_, rutas| !rutas.is_empty());
+
+    let antes = cfg.historial.len();
+    cfg.historial.retain(|e| existe(&e.ruta));
+    quitadas += antes - cfg.historial.len();
+
+    let antes = cfg.orden_manual.len();
+    cfg.orden_manual.retain(existe);
+    quitadas += antes - cfg.orden_manual.len();
+
+    cfg.fondos_por_monitor.retain(|_, r| existe(r));
+
+    if let Some(nombre) = cfg.coleccion_activa.as_ref() {
+        if !cfg.colecciones.contains_key(nombre) {
+            cfg.coleccion_activa = None;
+        }
+    }
+    quitadas
+}
+
+/// Recolecta los archivos soportados dentro de una carpeta (recursivo, hasta
+/// 3 niveles), excluyendo la propia biblioteca para no duplicar al reimportar.
+pub fn archivos_soportados_en(raiz: &Path, excluir: &Path) -> Vec<PathBuf> {
+    fn recorrer(dir: &Path, excluir: &Path, nivel: u32, salida: &mut Vec<PathBuf>) {
+        if nivel > 3 {
+            return;
+        }
+        let Ok(entradas) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entrada in entradas.flatten() {
+            let path = entrada.path();
+            if path.starts_with(excluir) {
+                continue;
+            }
+            if path.is_dir() {
+                recorrer(&path, excluir, nivel + 1, salida);
+            } else if extension_ok(&path) {
+                salida.push(path);
+            }
+        }
+    }
+    let mut salida = Vec::new();
+    recorrer(raiz, excluir, 1, &mut salida);
+    salida.sort();
+    salida
+}
+
 /// Devuelve true si el equipo está funcionando con batería (no enchufado).
 pub fn en_bateria() -> bool {
     let Ok(dir) = std::fs::read_dir("/sys/class/power_supply") else {
@@ -1188,6 +1344,126 @@ mod tests {
         let con_index = escanear_dirs(&base, |p| p.join("index.theme").is_file());
         assert_eq!(con_index, vec!["SoloIconos"]);
         assert!(escanear_dirs(&base, |_| false).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn historial_reciente_sin_duplicados_y_con_tope() {
+        let mut cfg = Config::default();
+        registrar_historial(&mut cfg, "/a.mp4");
+        registrar_historial(&mut cfg, "/b.mp4");
+        registrar_historial(&mut cfg, "/a.mp4");
+        let rutas: Vec<&str> = cfg.historial.iter().map(|e| e.ruta.as_str()).collect();
+        assert_eq!(rutas, vec!["/a.mp4", "/b.mp4"]);
+        assert!(cfg.historial.iter().all(|e| e.fecha > 0));
+
+        for i in 0..HISTORIAL_MAX + 5 {
+            registrar_historial(&mut cfg, &format!("/f{}.mp4", i));
+        }
+        assert_eq!(cfg.historial.len(), HISTORIAL_MAX);
+        assert_eq!(
+            cfg.historial[0].ruta,
+            format!("/f{}.mp4", HISTORIAL_MAX + 4)
+        );
+    }
+
+    #[test]
+    fn siguiente_de_lista_ciclico_y_aleatorio() {
+        let lista = vec![
+            PathBuf::from("/a.mp4"),
+            PathBuf::from("/b.mp4"),
+            PathBuf::from("/c.mp4"),
+        ];
+        assert_eq!(
+            siguiente_de_lista(&lista, Some("/a.mp4"), false),
+            Some(PathBuf::from("/b.mp4"))
+        );
+        assert_eq!(
+            siguiente_de_lista(&lista, Some("/c.mp4"), false),
+            Some(PathBuf::from("/a.mp4"))
+        );
+        assert_eq!(
+            siguiente_de_lista(&lista, None, false),
+            Some(PathBuf::from("/a.mp4"))
+        );
+        assert_eq!(siguiente_de_lista(&[], Some("/a.mp4"), true), None);
+
+        // Al azar nunca repite el actual si hay más de uno.
+        for _ in 0..20 {
+            let elegido = siguiente_de_lista(&lista, Some("/a.mp4"), true).unwrap();
+            assert_ne!(elegido, PathBuf::from("/a.mp4"));
+            assert!(lista.contains(&elegido));
+        }
+        // Con un solo fondo, se permite repetir.
+        let uno = vec![PathBuf::from("/a.mp4")];
+        assert_eq!(
+            siguiente_de_lista(&uno, Some("/a.mp4"), true),
+            Some(PathBuf::from("/a.mp4"))
+        );
+    }
+
+    #[test]
+    fn limpiar_referencias_quita_lo_inexistente() {
+        let dir = dir_temporal("limpiar");
+        let real = dir.join("real.mp4");
+        std::fs::write(&real, b"x").unwrap();
+        let real = real.to_string_lossy().to_string();
+
+        let mut cfg = Config {
+            favoritos: vec![real.clone(), "/no-existe.mp4".into()],
+            ..Default::default()
+        };
+        cfg.etiquetas.insert(real.clone(), vec!["x".into()]);
+        cfg.etiquetas
+            .insert("/no-existe.mp4".into(), vec!["y".into()]);
+        cfg.colecciones
+            .insert("Buena".into(), vec![real.clone(), "/no-existe.mp4".into()]);
+        cfg.colecciones
+            .insert("Vacia".into(), vec!["/no-existe.mp4".into()]);
+        cfg.historial = vec![
+            EntradaHistorial {
+                ruta: real.clone(),
+                fecha: 1,
+            },
+            EntradaHistorial {
+                ruta: "/no-existe.mp4".into(),
+                fecha: 2,
+            },
+        ];
+        cfg.orden_manual = vec![real.clone(), "/no-existe.mp4".into()];
+        cfg.fondos_por_monitor
+            .insert("eDP-1".into(), "/no-existe.mp4".into());
+        cfg.coleccion_activa = Some("Vacia".into());
+
+        let quitadas = limpiar_referencias(&mut cfg);
+        assert_eq!(quitadas, 6);
+        assert_eq!(cfg.favoritos, vec![real.clone()]);
+        assert_eq!(cfg.etiquetas.len(), 1);
+        assert_eq!(cfg.colecciones.len(), 1);
+        assert_eq!(cfg.colecciones["Buena"], vec![real.clone()]);
+        assert_eq!(cfg.historial.len(), 1);
+        assert_eq!(cfg.orden_manual, vec![real.clone()]);
+        assert!(cfg.fondos_por_monitor.is_empty());
+        assert!(cfg.coleccion_activa.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archivos_soportados_en_recorre_y_filtra() {
+        let dir = dir_temporal("carpetas");
+        let sub = dir.join("sub").join("nivel2");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(dir.join("b.png"), b"x").unwrap();
+        std::fs::write(sub.join("a.mp4"), b"x").unwrap();
+        std::fs::write(dir.join("c.txt"), b"x").unwrap();
+
+        let encontrados = archivos_soportados_en(&dir, Path::new("/ninguna"));
+        assert_eq!(encontrados.len(), 2);
+        assert!(encontrados[0].ends_with("b.png"));
+        assert!(encontrados[1].ends_with("a.mp4"));
+
+        let sin_sub = archivos_soportados_en(&dir, &dir.join("sub"));
+        assert_eq!(sin_sub.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

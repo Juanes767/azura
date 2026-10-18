@@ -2,12 +2,12 @@
 use gdk4_x11::X11Surface;
 use gtk4::prelude::*;
 use gtk4::{
-    gdk, gio, glib, Align, Application, ApplicationWindow, Box as GtkBox, Button, ContentFit,
-    CssProvider, DragSource, DropDown, DropTarget, Entry, EventControllerKey,
+    gdk, gio, glib, Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton,
+    ContentFit, CssProvider, DragSource, DropDown, DropTarget, Entry, EventControllerKey,
     EventControllerMotion, FileDialog, FileFilter, FlowBox, FlowBoxChild, GestureClick, HeaderBar,
-    Image, Label, ListBox, ListBoxRow, Orientation, Overlay, Picture, Revealer,
-    RevealerTransitionType, ScrolledWindow, SearchEntry, SelectionMode, SpinButton, Stack,
-    StackTransitionType, StringList, Switch, ToggleButton,
+    Image, Label, ListBox, ListBoxRow, Orientation, Overlay, Picture, Popover, Revealer,
+    RevealerTransitionType, ScrolledWindow, SearchEntry, SelectionMode, Separator, SpinButton,
+    Stack, StackTransitionType, StringList, Switch, ToggleButton,
 };
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -455,6 +455,14 @@ enum Filtro {
     Favoritos,
 }
 
+/// Qué se muestra en la biblioteca además del filtro por tipo.
+#[derive(Clone, PartialEq)]
+enum VistaBiblio {
+    Todas,
+    Recientes,
+    Coleccion(String),
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum Orden {
     NombreAz,
@@ -517,6 +525,12 @@ struct AppUi {
     query: RefCell<String>,
     search: SearchEntry,
     chip_todo: ToggleButton,
+    vista: RefCell<VistaBiblio>,
+    vista_dd: DropDown,
+    /// Selector «Rotar en» de Ajustes (se rellena al construir esa página)
+    rotacion_dd: RefCell<Option<DropDown>>,
+    /// Evita que refrescar los desplegables dispare sus señales
+    dd_silencio: Cell<bool>,
     dot_daemon: Label,
     txt_daemon: Label,
     lbl_hotkey: Label,
@@ -636,6 +650,85 @@ fn etiquetas_de(cfg: &Config, path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Popover para marcar o desmarcar el fondo en colecciones, o crear una nueva.
+fn popover_colecciones(ui: &Rc<AppUi>, path: &Path, ancla: &Button) {
+    let caja = GtkBox::new(Orientation::Vertical, 6);
+    caja.set_margin_top(10);
+    caja.set_margin_bottom(10);
+    caja.set_margin_start(12);
+    caja.set_margin_end(12);
+
+    let titulo = Label::new(Some("COLECCIONES"));
+    titulo.add_css_class("chip");
+    titulo.set_halign(Align::Start);
+    caja.append(&titulo);
+
+    let clave = path.to_string_lossy().to_string();
+    let nombres: Vec<String> = ui.config.borrow().colecciones.keys().cloned().collect();
+    if nombres.is_empty() {
+        let vacio = Label::new(Some("Todavía no hay colecciones"));
+        vacio.add_css_class("hero-sub");
+        vacio.set_halign(Align::Start);
+        caja.append(&vacio);
+    }
+    for nombre in nombres {
+        let dentro = ui
+            .config
+            .borrow()
+            .colecciones
+            .get(&nombre)
+            .map(|r| r.contains(&clave))
+            .unwrap_or(false);
+        let check = CheckButton::with_label(&nombre);
+        check.set_active(dentro);
+        let ui2 = ui.clone();
+        let nombre2 = nombre.clone();
+        let path2 = path.to_path_buf();
+        check.connect_toggled(move |c| {
+            ui2.alternar_en_coleccion(&nombre2, &path2, c.is_active());
+        });
+        caja.append(&check);
+    }
+
+    caja.append(&Separator::new(Orientation::Horizontal));
+    let fila = GtkBox::new(Orientation::Horizontal, 6);
+    let entrada = Entry::new();
+    entrada.set_placeholder_text(Some("Nueva colección…"));
+    entrada.set_hexpand(true);
+    let btn = Button::with_label("Añadir");
+    fila.append(&entrada);
+    fila.append(&btn);
+    caja.append(&fila);
+
+    let popover = Popover::new();
+    popover.set_child(Some(&caja));
+    popover.set_parent(ancla);
+
+    let crear: Rc<dyn Fn()> = {
+        let ui2 = ui.clone();
+        let path2 = path.to_path_buf();
+        let popover2 = popover.clone();
+        let entrada2 = entrada.clone();
+        Rc::new(move || {
+            let texto = entrada2.text();
+            if ui2.crear_coleccion_con(&texto, &path2) {
+                ui2.toast(
+                    &format!("Añadido a «{}»", texto.trim()),
+                    "folder-new-symbolic",
+                );
+                entrada2.set_text("");
+                popover2.popdown();
+            }
+        })
+    };
+    let c1 = crear.clone();
+    btn.connect_clicked(move |_| c1());
+    let c2 = crear.clone();
+    entrada.connect_activate(move |_| c2());
+
+    popover.popup();
+}
+
 /// Resumen de una importación (para avisos de duplicados).
 struct ResultadoImport {
     añadidos: usize,
@@ -674,14 +767,6 @@ fn boton_con_icono(clase: &str, icono_nombre: &str, texto: &str) -> Button {
     caja.append(&Label::new(Some(texto)));
     b.set_child(Some(&caja));
     b
-}
-
-fn aleatorio(n: usize) -> usize {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0) as usize;
-    nanos % n.max(1)
 }
 
 /// Fecha de modificación en segundos (0 si no se puede leer).
@@ -877,8 +962,26 @@ impl AppUi {
     fn aplicar_visibilidad(&self) {
         let q = self.query.borrow().to_lowercase();
         let filtro = self.filtro.get();
+        let vista = self.vista.borrow().clone();
         let favoritos: Vec<String> = self.config.borrow().favoritos.clone();
         let etiquetas = self.config.borrow().etiquetas.clone();
+        let historial: Vec<String> = self
+            .config
+            .borrow()
+            .historial
+            .iter()
+            .map(|e| e.ruta.clone())
+            .collect();
+        let coleccion: Vec<String> = match &vista {
+            VistaBiblio::Coleccion(nombre) => self
+                .config
+                .borrow()
+                .colecciones
+                .get(nombre)
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let mut visibles = 0usize;
         let total;
         {
@@ -894,13 +997,19 @@ impl AppUi {
                         favoritos.iter().any(|f| f == ruta.as_ref())
                     }
                 };
+                let ruta = item.path.to_string_lossy();
+                let por_vista = match &vista {
+                    VistaBiblio::Todas => true,
+                    VistaBiblio::Recientes => historial.iter().any(|r| r == ruta.as_ref()),
+                    VistaBiblio::Coleccion(_) => coleccion.iter().any(|r| r == ruta.as_ref()),
+                };
                 let por_texto = q.is_empty()
                     || item.nombre.to_lowercase().contains(&q)
                     || etiquetas
-                        .get(item.path.to_string_lossy().as_ref())
+                        .get(ruta.as_ref())
                         .map(|tags| tags.iter().any(|t| t.to_lowercase().contains(&q)))
                         .unwrap_or(false);
-                let visible = por_tipo && por_texto;
+                let visible = por_tipo && por_vista && por_texto;
                 item.child.set_visible(visible);
                 if visible {
                     visibles += 1;
@@ -928,7 +1037,123 @@ impl AppUi {
         self.chip_todo.set_active(true);
         *self.query.borrow_mut() = String::new();
         self.filtro.set(Filtro::Todo);
+        *self.vista.borrow_mut() = VistaBiblio::Todas;
+        self.vista_dd.set_selected(0);
         self.aplicar_visibilidad();
+    }
+
+    /// Reconstruye los desplegables que listan colecciones (vista y rotación),
+    /// conservando la selección si la colección sigue existiendo.
+    fn refrescar_dd_colecciones(self: &Rc<Self>) {
+        let nombres: Vec<String> = self.config.borrow().colecciones.keys().cloned().collect();
+
+        // Desplegable de la biblioteca: Todas | Recientes | colecciones…
+        let mut etiquetas: Vec<&str> = vec!["Todas las colecciones", "Recientes"];
+        etiquetas.extend(nombres.iter().map(|n| n.as_str()));
+        let seleccion = match &*self.vista.borrow() {
+            VistaBiblio::Todas => 0,
+            VistaBiblio::Recientes => 1,
+            VistaBiblio::Coleccion(n) => nombres
+                .iter()
+                .position(|x| x == n)
+                .map(|i| i + 2)
+                .unwrap_or(0),
+        };
+        if seleccion == 0 {
+            *self.vista.borrow_mut() = VistaBiblio::Todas;
+        }
+        self.dd_silencio.set(true);
+        self.vista_dd.set_model(Some(&StringList::new(&etiquetas)));
+        self.vista_dd.set_selected(seleccion as u32);
+        self.dd_silencio.set(false);
+
+        // Desplegable de rotación en Ajustes.
+        if let Some(dd) = self.rotacion_dd.borrow().as_ref() {
+            let activa = self.config.borrow().coleccion_activa.clone();
+            let mut etiquetas: Vec<&str> = vec!["Toda la biblioteca"];
+            etiquetas.extend(nombres.iter().map(|n| n.as_str()));
+            let seleccion = activa
+                .as_ref()
+                .and_then(|n| nombres.iter().position(|x| x == n))
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            if seleccion == 0 {
+                self.config.borrow_mut().coleccion_activa = None;
+            }
+            self.dd_silencio.set(true);
+            dd.set_model(Some(&StringList::new(&etiquetas)));
+            dd.set_selected(seleccion as u32);
+            self.dd_silencio.set(false);
+        }
+    }
+
+    /// Quita referencias a archivos que ya no existen y avisa si hubo cambios.
+    fn limpiar_arranque(self: &Rc<Self>) {
+        let quitadas = {
+            let mut cfg = self.config.borrow_mut();
+            let n = core::limpiar_referencias(&mut cfg);
+            if n > 0 {
+                let _ = cfg.guardar();
+            }
+            n
+        };
+        if quitadas > 0 {
+            self.toast(
+                &format!(
+                    "{} referencias a fondos que ya no existen se eliminaron",
+                    quitadas
+                ),
+                "dialog-warning-symbolic",
+            );
+        }
+    }
+
+    /// Añade o quita un fondo de una colección y guarda el resultado.
+    fn alternar_en_coleccion(self: &Rc<Self>, nombre: &str, path: &Path, dentro: bool) {
+        let clave = path.to_string_lossy().to_string();
+        {
+            let mut cfg = self.config.borrow_mut();
+            let rutas = cfg.colecciones.entry(nombre.to_string()).or_default();
+            if dentro {
+                if !rutas.contains(&clave) {
+                    rutas.push(clave.clone());
+                }
+            } else {
+                rutas.retain(|r| r != &clave);
+            }
+            if rutas.is_empty() {
+                cfg.colecciones.remove(nombre);
+            }
+            if cfg.coleccion_activa.as_deref() == Some(nombre)
+                && !cfg.colecciones.contains_key(nombre)
+            {
+                cfg.coleccion_activa = None;
+            }
+            let _ = cfg.guardar();
+        }
+        enviar_guardar_config(&self.config);
+        self.refrescar_dd_colecciones();
+        self.aplicar_visibilidad();
+    }
+
+    /// Crea una colección (si hace falta) y añade el fondo; devuelve false si
+    /// el nombre no es válido.
+    fn crear_coleccion_con(self: &Rc<Self>, nombre: &str, path: &Path) -> bool {
+        let nombre = nombre.trim();
+        if nombre.is_empty() {
+            return false;
+        }
+        let nombre = if self.config.borrow().colecciones.contains_key(nombre) {
+            nombre.to_string()
+        } else {
+            self.config
+                .borrow_mut()
+                .colecciones
+                .insert(nombre.to_string(), Vec::new());
+            nombre.to_string()
+        };
+        self.alternar_en_coleccion(&nombre, path, true);
+        true
     }
 
     fn actualizar_hero(&self) {
@@ -1157,7 +1382,7 @@ impl AppUi {
         let elegido = if candidatos.is_empty() {
             &fondos[0]
         } else {
-            candidatos[aleatorio(candidatos.len())]
+            candidatos[core::aleatorio(candidatos.len())]
         };
         self.aplicar_fondo(elegido);
     }
@@ -1342,6 +1567,28 @@ impl AppUi {
     }
 
     fn importar_archivos(self: &Rc<Self>, archivos: &[gio::File]) -> ResultadoImport {
+        let rutas: Vec<PathBuf> = archivos.iter().filter_map(|a| a.path()).collect();
+        self.importar_rutas(&rutas)
+    }
+
+    /// Importa una carpeta entera (recursivo): recoge los archivos soportados
+    /// y los añade como cualquier otra importación.
+    fn importar_carpeta_dialogo(self: &Rc<Self>, parent: &ApplicationWindow) {
+        let dialog = FileDialog::new();
+        dialog.set_title("Importar una carpeta completa");
+
+        let ui = self.clone();
+        let dir_bib = self.dir.clone();
+        dialog.select_folder(Some(parent), None::<&gio::Cancellable>, move |res| {
+            let Ok(carpeta) = res else { return };
+            let Some(ruta) = carpeta.path() else { return };
+            let archivos = core::archivos_soportados_en(&ruta, &dir_bib);
+            let r = ui.importar_rutas(&archivos);
+            ui.avisar_importacion(&r);
+        });
+    }
+
+    fn importar_rutas(self: &Rc<Self>, rutas: &[PathBuf]) -> ResultadoImport {
         let enlazar = self.config.borrow().enlazar_al_importar;
 
         // Huellas de lo que ya hay en la biblioteca (para omitir duplicados)
@@ -1354,19 +1601,18 @@ impl AppUi {
             añadidos: 0,
             duplicados: 0,
         };
-        for archivo in archivos {
-            let Some(src) = archivo.path() else { continue };
-            if !core::extension_ok(&src) {
+        for src in rutas {
+            if !core::extension_ok(src) {
                 continue;
             }
-            let huella = core::hash_rapido(&src);
+            let huella = core::hash_rapido(src);
             if let Some(h) = huella {
                 if huellas.contains(&h) {
                     r.duplicados += 1;
                     continue;
                 }
             }
-            if self.importar_uno(&src, enlazar) {
+            if self.importar_uno(src, enlazar) {
                 if let Some(h) = huella {
                     huellas.push(h);
                 }
@@ -1749,7 +1995,7 @@ fn abrir_preview(ui: &Rc<AppUi>, parent: &ApplicationWindow, path: &Path) {
     let socket = core::dir_sockets().join(format!(
         "preview-{}-{}.sock",
         std::process::id(),
-        aleatorio(1_000_000)
+        core::aleatorio(1_000_000)
     ));
     let proceso = Rc::new(ProcesoPreview {
         hijo: RefCell::new(None),
@@ -1810,9 +2056,19 @@ fn abrir_preview(ui: &Rc<AppUi>, parent: &ApplicationWindow, path: &Path) {
     caja_tags.append(&etiqueta_lbl);
     caja_tags.append(&entrada_tags);
 
+    let btn_colecciones = Button::from_icon_name("folder-new-symbolic");
+    btn_colecciones.add_css_class("hover-prev");
+    btn_colecciones.set_tooltip_text(Some("Añadir o quitar de colecciones"));
+    {
+        let ui2 = ui.clone();
+        let path2 = path.to_path_buf();
+        btn_colecciones.connect_clicked(move |b| popover_colecciones(&ui2, &path2, b));
+    }
+
     barra.append(&btn_pausa);
     barra.append(&info);
     barra.append(&caja_tags);
+    barra.append(&btn_colecciones);
     barra.append(&btn_cerrar);
     barra.append(&btn_aplicar);
 
@@ -2354,6 +2610,54 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
             let _ = ui2.config.borrow().guardar();
             enviar_guardar_config(&ui2.config);
         });
+        lista_auto.append(&row);
+    }
+    {
+        // Rotar solo dentro de una colección (o toda la biblioteca)
+        let colecciones: Vec<String> = ui.config.borrow().colecciones.keys().cloned().collect();
+        let mut opciones: Vec<&str> = vec!["Toda la biblioteca"];
+        opciones.extend(colecciones.iter().map(|n| n.as_str()));
+        let dd = DropDown::from_strings(&opciones);
+        dd.set_valign(Align::Center);
+        let seleccion = ui
+            .config
+            .borrow()
+            .coleccion_activa
+            .as_ref()
+            .and_then(|n| colecciones.iter().position(|x| x == n))
+            .map(|i| i + 1)
+            .unwrap_or(0) as u32;
+        ui.dd_silencio.set(true);
+        dd.set_selected(seleccion);
+        ui.dd_silencio.set(false);
+        *ui.rotacion_dd.borrow_mut() = Some(dd.clone());
+
+        let row = fila_ajuste(
+            "folder-new-symbolic",
+            "Rotar en",
+            "Limita el cambio automático a los fondos de una colección",
+            &dd,
+        );
+        row.set_sensitive(ui.config.borrow().slideshow);
+        {
+            let ui2 = ui.clone();
+            let colecciones2 = colecciones.clone();
+            dd.connect_selected_notify(move |d| {
+                if ui2.dd_silencio.get() {
+                    return;
+                }
+                let idx = d.selected();
+                ui2.config.borrow_mut().coleccion_activa = if idx == 0 {
+                    None
+                } else {
+                    colecciones2.get(idx as usize - 1).cloned()
+                };
+                let _ = ui2.config.borrow().guardar();
+                enviar_guardar_config(&ui2.config);
+            });
+        }
+        let row_sens = row.clone();
+        sw_slideshow.connect_active_notify(move |s| row_sens.set_sensitive(s.is_active()));
         lista_auto.append(&row);
     }
     {
@@ -2956,6 +3260,14 @@ fn build_ui(app: &Application) {
     btn_add.set_halign(Align::Fill);
     sidebar.append(&btn_add);
 
+    let btn_add_carpeta = boton_con_icono("btn-ghost", "folder-open-symbolic", "Importar carpeta");
+    btn_add_carpeta.set_halign(Align::Fill);
+    btn_add_carpeta.set_margin_top(8);
+    btn_add_carpeta.set_tooltip_text(Some(
+        "Añade de una vez todos los fondos que haya dentro de una carpeta",
+    ));
+    sidebar.append(&btn_add_carpeta);
+
     // ── Página: biblioteca ────────────────────────────────────
     let pagina_bib = GtkBox::new(Orientation::Vertical, 0);
     pagina_bib.set_margin_top(18);
@@ -3076,6 +3388,13 @@ fn build_ui(app: &Application) {
     chips.append(&chip_imagen);
     chips.append(&chip_favoritos);
     barra.append(&chips);
+
+    let vista_dd = DropDown::from_strings(&["Todas las colecciones", "Recientes"]);
+    vista_dd.set_valign(Align::Center);
+    vista_dd.set_tooltip_text(Some(
+        "Ver solo los fondos de una colección, o los usados recientemente",
+    ));
+    barra.append(&vista_dd);
 
     let orden_dd = DropDown::from_strings(&[
         "Nombre A-Z",
@@ -3290,6 +3609,10 @@ fn build_ui(app: &Application) {
         query: RefCell::new(String::new()),
         search: search.clone(),
         chip_todo: chip_todo.clone(),
+        vista: RefCell::new(VistaBiblio::Todas),
+        vista_dd: vista_dd.clone(),
+        rotacion_dd: RefCell::new(None),
+        dd_silencio: Cell::new(false),
         dot_daemon: dot.clone(),
         txt_daemon: txt.clone(),
         lbl_hotkey: lbl_hotkey.clone(),
@@ -3376,6 +3699,26 @@ fn build_ui(app: &Application) {
         });
     }
 
+    // Vista por colección o recientes
+    {
+        let ui2 = ui.clone();
+        vista_dd.connect_selected_notify(move |d| {
+            if ui2.dd_silencio.get() {
+                return;
+            }
+            let nombres: Vec<String> = ui2.config.borrow().colecciones.keys().cloned().collect();
+            *ui2.vista.borrow_mut() = match d.selected() {
+                0 => VistaBiblio::Todas,
+                1 => VistaBiblio::Recientes,
+                i => nombres
+                    .get(i as usize - 2)
+                    .map(|n| VistaBiblio::Coleccion(n.clone()))
+                    .unwrap_or(VistaBiblio::Todas),
+            };
+            ui2.aplicar_visibilidad();
+        });
+    }
+
     // Orden de la biblioteca
     {
         let ui2 = ui.clone();
@@ -3421,6 +3764,11 @@ fn build_ui(app: &Application) {
         let ui2 = ui.clone();
         let win = window.clone();
         vacio_btn.connect_clicked(move |_| ui2.importar_dialogo(&win));
+    }
+    {
+        let ui2 = ui.clone();
+        let win = window.clone();
+        btn_add_carpeta.connect_clicked(move |_| ui2.importar_carpeta_dialogo(&win));
     }
     {
         let ui2 = ui.clone();
@@ -3500,6 +3848,8 @@ fn build_ui(app: &Application) {
         });
     }
 
+    ui.limpiar_arranque();
+    ui.refrescar_dd_colecciones();
     ui.recargar();
     window.present();
 }
