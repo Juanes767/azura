@@ -398,6 +398,8 @@ pub fn gsettings_set(clave: &str, valor: &str) -> bool {
 pub const GS_TEMA_GTK: &str = "org.cinnamon.desktop.interface gtk-theme";
 pub const GS_TEMA_WM: &str = "org.cinnamon.desktop.wm.preferences theme";
 pub const GS_TEMA_CINNAMON: &str = "org.cinnamon.theme name";
+pub const GS_TEMA_ICONOS: &str = "org.cinnamon.desktop.interface icon-theme";
+pub const GS_TEMA_CURSOR: &str = "org.cinnamon.desktop.interface cursor-theme";
 
 /// Perfil de personalización guardado por el usuario.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -409,6 +411,12 @@ pub struct Perfil {
     pub wm: Option<String>,
     #[serde(default)]
     pub cinnamon: Option<String>,
+    /// Tema de iconos (define también el color de las carpetas)
+    #[serde(default)]
+    pub iconos: Option<String>,
+    /// Tema del puntero del ratón
+    #[serde(default)]
+    pub cursor: Option<String>,
     /// Nombre del archivo original de fastfetch («config.jsonc» o «config.json»)
     #[serde(default)]
     pub fastfetch: Option<String>,
@@ -462,6 +470,83 @@ fn extension_fastfetch(nombre: &str) -> Option<&'static str> {
     }
 }
 
+// ── Temas instalados en el sistema ─────────────────────────────
+
+/// Directorios donde buscar temas de escritorio (GTK, ventanas, Cinnamon).
+fn dirs_temas() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".themes"));
+        dirs.push(home.join(".local/share/themes"));
+    }
+    dirs.push(PathBuf::from("/usr/share/themes"));
+    dirs
+}
+
+/// Directorios donde buscar temas de iconos y cursores.
+fn dirs_iconos() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".icons"));
+        dirs.push(home.join(".local/share/icons"));
+    }
+    dirs.push(PathBuf::from("/usr/share/icons"));
+    dirs
+}
+
+/// Nombres de subdirectorios de `base_dirs` que cumplen `filtro`, sin repetir.
+fn escanear_dirs(base_dirs: &[PathBuf], filtro: impl Fn(&Path) -> bool) -> Vec<String> {
+    let mut nombres: Vec<String> = Vec::new();
+    for base in base_dirs {
+        let Ok(entradas) = std::fs::read_dir(base) else {
+            continue;
+        };
+        for entrada in entradas.flatten() {
+            let ruta = entrada.path();
+            if !ruta.is_dir() {
+                continue;
+            }
+            let Some(nombre) = ruta.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if nombres.iter().any(|n| n == nombre) || !filtro(&ruta) {
+                continue;
+            }
+            nombres.push(nombre.to_string());
+        }
+    }
+    nombres.sort_by_key(|n| n.to_lowercase());
+    nombres
+}
+
+/// Temas GTK instalados; sirven también como temas de ventanas.
+pub fn temas_gtk_instalados() -> Vec<String> {
+    escanear_dirs(&dirs_temas(), |p| {
+        ["gtk-2.0", "gtk-3.0", "gtk-4.0"]
+            .iter()
+            .any(|d| p.join(d).is_dir())
+    })
+}
+
+/// Temas de escritorio (Cinnamon) instalados.
+pub fn temas_cinnamon_instalados() -> Vec<String> {
+    escanear_dirs(&dirs_temas(), |p| p.join("cinnamon").is_dir())
+}
+
+/// Temas de iconos instalados; definen también el color de las carpetas.
+pub fn temas_iconos_instalados() -> Vec<String> {
+    escanear_dirs(&dirs_iconos(), |p| {
+        std::fs::read_to_string(p.join("index.theme"))
+            .map(|t| t.contains("[Icon Theme]"))
+            .unwrap_or(false)
+    })
+}
+
+/// Temas de cursor instalados.
+pub fn temas_cursor_instalados() -> Vec<String> {
+    escanear_dirs(&dirs_iconos(), |p| p.join("cursors").is_dir())
+}
+
 impl Perfil {
     pub fn dir(&self) -> PathBuf {
         dir_perfiles().join(slug(&self.nombre))
@@ -498,6 +583,8 @@ pub fn guardar_perfil(nombre: &str) -> std::io::Result<Perfil> {
     perfil.gtk = gsettings_get(GS_TEMA_GTK);
     perfil.wm = gsettings_get(GS_TEMA_WM);
     perfil.cinnamon = gsettings_get(GS_TEMA_CINNAMON);
+    perfil.iconos = gsettings_get(GS_TEMA_ICONOS);
+    perfil.cursor = gsettings_get(GS_TEMA_CURSOR);
 
     if let Some(origen) = ruta_fastfetch() {
         let archivo = origen
@@ -552,6 +639,12 @@ pub fn aplicar_perfil(perfil: &Perfil) -> std::io::Result<()> {
     }
     if let Some(v) = &perfil.cinnamon {
         gsettings_set(GS_TEMA_CINNAMON, v);
+    }
+    if let Some(v) = &perfil.iconos {
+        gsettings_set(GS_TEMA_ICONOS, v);
+    }
+    if let Some(v) = &perfil.cursor {
+        gsettings_set(GS_TEMA_CURSOR, v);
     }
 
     if let Some(archivo) = &perfil.fastfetch {
@@ -960,6 +1053,8 @@ mod tests {
             gtk: Some("Mint-Y-Dark".to_string()),
             wm: Some("Mint-Y".to_string()),
             cinnamon: Some("Orchis-Dark".to_string()),
+            iconos: Some("Mint-Y-Blue".to_string()),
+            cursor: Some("Bibata-Modern-Ice".to_string()),
             fastfetch: Some("config.jsonc".to_string()),
             kitty: Some("kitty.conf".to_string()),
         };
@@ -967,6 +1062,8 @@ mod tests {
         let vuelta: Perfil = serde_json::from_str(&texto).unwrap();
         assert_eq!(vuelta.nombre, "Noche morada");
         assert_eq!(vuelta.gtk.as_deref(), Some("Mint-Y-Dark"));
+        assert_eq!(vuelta.iconos.as_deref(), Some("Mint-Y-Blue"));
+        assert_eq!(vuelta.cursor.as_deref(), Some("Bibata-Modern-Ice"));
         assert_eq!(vuelta.fastfetch.as_deref(), Some("config.jsonc"));
         assert_eq!(vuelta.kitty.as_deref(), Some("kitty.conf"));
         // Campos opcionales ausentes no rompen el parseo
@@ -1025,6 +1122,36 @@ mod tests {
         assert_eq!(extension_fastfetch("config.json"), Some("json"));
         assert_eq!(extension_fastfetch("config.toml"), None);
         assert_eq!(extension_fastfetch("sin-extension"), None);
+    }
+
+    #[test]
+    fn escaneo_de_temas_por_filtro() {
+        let dir = dir_temporal("temas");
+        let gtk = dir.join("Mint-Y");
+        std::fs::create_dir_all(gtk.join("gtk-3.0")).unwrap();
+        let iconos = dir.join("SoloIconos");
+        std::fs::create_dir_all(iconos.join("cursors")).unwrap();
+        std::fs::write(
+            iconos.join("index.theme"),
+            "[Icon Theme]\nName=SoloIconos\n",
+        )
+        .unwrap();
+        let vacio = dir.join("Vacio");
+        std::fs::create_dir_all(&vacio).unwrap();
+
+        let base = [dir.clone()];
+        assert_eq!(
+            escanear_dirs(&base, |p| p.join("gtk-3.0").is_dir()),
+            vec!["Mint-Y"]
+        );
+        assert_eq!(
+            escanear_dirs(&base, |p| p.join("cursors").is_dir()),
+            vec!["SoloIconos"]
+        );
+        let con_index = escanear_dirs(&base, |p| p.join("index.theme").is_file());
+        assert_eq!(con_index, vec!["SoloIconos"]);
+        assert!(escanear_dirs(&base, |_| false).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

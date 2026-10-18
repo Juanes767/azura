@@ -26,8 +26,11 @@ por debajo de las ventanas normales.
 - ▶️ **Vista previa** integrada antes de aplicar un fondo, con controles de
   pausa, etiquetas, cerrar y aplicar.
 - 🔁 **Cambio automático** de fondo con intervalo configurable y orden aleatorio.
-- 🚧 **Perfiles** *(en desarrollo)*: guarda tu combinación de temas del sistema
-  (GTK, ventanas y Cinnamon), la configuración de `fastfetch` y la de `kitty`
+- 🎨 **Aspecto al momento**: cambia el tema de iconos (y con él el color de
+  las carpetas), el tema GTK, el de ventanas, el de Cinnamon y el cursor con
+  un clic.
+- 🚧 **Perfiles**: guarda tu combinación de temas del sistema (GTK, ventanas,
+  Cinnamon, iconos y cursor), la configuración de `fastfetch` y la de `kitty`
   en un perfil con nombre, y aplícala cuando quieras.
 - 😴 **Pausa inteligente**: al entrar en pantalla completa, con batería, al
   cambiar de aplicación o de espacio de trabajo, con la pantalla bloqueada y
@@ -124,21 +127,29 @@ En Ajustes se puede fijar un fondo distinto por monitor. El selector
 
 El cambio automático respeta los fondos ya fijados por monitor.
 
-## 🚧 Perfiles (en desarrollo)
+## 🎨 Perfiles
 
-> Esta función sigue en desarrollo: puede cambiar en próximas versiones.
+La página **Perfiles** de la barra lateral cambia el aspecto del sistema al
+momento y guarda tu personalización para restaurarla cuando quieras.
 
-La página **Perfiles** de la barra lateral guarda tu personalización actual y
-la restaura cuando quieras:
+**Aspecto del sistema**: selectores con los temas instalados en tu equipo; al
+elegir uno se aplica al instante:
 
-- **Temas del sistema**: tema GTK, tema de ventanas y tema del escritorio
-  (Cinnamon).
-- **fastfetch**: tu configuración de `fastfetch`.
-- **kitty**: tu `kitty.conf`; al aplicar el perfil, kitty recarga su
-  configuración al instante.
+- **Iconos y color de carpetas**: tema de iconos (por ejemplo Mint-Y, Papirus
+  o cualquier tema con carpeta `icon-theme`).
+- **Tema de aplicaciones (GTK)** y **tema de ventanas**.
+- **Tema de escritorio (Cinnamon)**.
+- **Cursor**.
 
-Guardar con un nombre que ya existe pide confirmación para reemplazarlo, y
-eliminar un perfil también pide confirmación.
+Los temas se buscan en `/usr/share/themes`, `/usr/share/icons`, `~/.themes`,
+`~/.icons`, `~/.local/share/themes` y `~/.local/share/icons`.
+
+**Perfiles guardados**: guarda la combinación actual de temas (GTK, ventanas,
+Cinnamon, iconos y cursor), tu configuración de `fastfetch` y tu `kitty.conf`.
+Al aplicar un perfil, kitty recarga su configuración al instante y los
+selectores se sincronizan. Guardar con un nombre que ya existe pide
+confirmación para reemplazarlo, y eliminar un perfil también pide
+confirmación.
 
 ## 📁 Rutas
 
@@ -153,7 +164,6 @@ eliminar un perfil también pide confirmación.
 ## ⚠️ Limitaciones
 
 - Solo X11: en Wayland el fondo no se puede anclar al escritorio.
-- La función de **perfiles está en desarrollo** y puede cambiar.
 
 ## 🔐 Seguridad
 

@@ -7,6 +7,15 @@ y el proyecto se adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Sin publicar]
 
+### Añadido
+
+- Página de perfiles ampliada: sección **Aspecto del sistema** con selectores
+  de tema de iconos (y color de carpetas), tema GTK, tema de ventanas, tema de
+  Cinnamon y cursor; al elegir uno se aplica al instante.
+- Los perfiles ahora guardan y restauran también el tema de iconos y el cursor,
+  y los selectores se sincronizan al aplicar un perfil.
+- Prueba del escaneo de temas instalados en el sistema.
+
 ### Seguridad
 
 - Los sockets IPC, de mpv y de la vista previa viven ahora en

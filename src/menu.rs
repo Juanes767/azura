@@ -531,6 +531,8 @@ struct AppUi {
     lightbox_sub: Label,
     pendiente: RefCell<Option<PathBuf>>,
     lista_perfiles: ListBox,
+    /// Selectores de tema de la página de perfiles: (combo, modelo, clave gsettings)
+    combos_temas: RefCell<Vec<(DropDown, StringList, String)>>,
 }
 
 fn main() {
@@ -2469,7 +2471,8 @@ fn construir_ajustes(ui: &Rc<AppUi>) -> GtkBox {
 
 // ── Página de perfiles ─────────────────────────────────────────
 
-/// Página «Perfiles»: guardar la personalización actual (temas, fastfetch,
+/// Página «Perfiles»: cambiar el aspecto del sistema (temas, iconos y color
+/// de carpetas, cursor), guardar la personalización actual (temas, fastfetch,
 /// kitty) y aplicar o eliminar perfiles guardados.
 fn construir_perfiles(ui: &Rc<AppUi>) -> GtkBox {
     let cont = GtkBox::new(Orientation::Vertical, 0);
@@ -2477,6 +2480,43 @@ fn construir_perfiles(ui: &Rc<AppUi>) -> GtkBox {
     cont.set_margin_top(10);
     cont.set_margin_bottom(48);
     cont.set_size_request(780, -1);
+
+    cont.append(&titulo_seccion(
+        "applications-graphics-symbolic",
+        "ASPECTO DEL SISTEMA",
+    ));
+    let card_aspecto = lista_ajustes();
+    card_aspecto.append(&fila_tema(
+        ui,
+        "Iconos y color de carpetas",
+        core::GS_TEMA_ICONOS,
+        core::temas_iconos_instalados(),
+    ));
+    card_aspecto.append(&fila_tema(
+        ui,
+        "Tema de aplicaciones (GTK)",
+        core::GS_TEMA_GTK,
+        core::temas_gtk_instalados(),
+    ));
+    card_aspecto.append(&fila_tema(
+        ui,
+        "Tema de ventanas",
+        core::GS_TEMA_WM,
+        core::temas_gtk_instalados(),
+    ));
+    card_aspecto.append(&fila_tema(
+        ui,
+        "Tema de escritorio (Cinnamon)",
+        core::GS_TEMA_CINNAMON,
+        core::temas_cinnamon_instalados(),
+    ));
+    card_aspecto.append(&fila_tema(
+        ui,
+        "Cursor",
+        core::GS_TEMA_CURSOR,
+        core::temas_cursor_instalados(),
+    ));
+    cont.append(&card_aspecto);
 
     cont.append(&titulo_seccion(
         "preferences-desktop-theme-symbolic",
@@ -2502,7 +2542,7 @@ fn construir_perfiles(ui: &Rc<AppUi>) -> GtkBox {
         let row = fila_ajuste(
             "document-save-symbolic",
             "Guardar perfil actual",
-            "Incluye tus temas (GTK, ventanas y Cinnamon), la configuración de fastfetch y la de kitty",
+            "Incluye tus temas (GTK, ventanas, Cinnamon, iconos y cursor), la configuración de fastfetch y la de kitty",
             &caja,
         );
         card_guardar.append(&row);
@@ -2513,6 +2553,72 @@ fn construir_perfiles(ui: &Rc<AppUi>) -> GtkBox {
     cont.append(&ui.lista_perfiles);
     refrescar_perfiles(ui);
     cont
+}
+
+/// Fila con un selector de temas instalados. Al elegir otro se aplica al
+/// sistema al instante; el perfil lo guardará al pulsar «Guardar».
+fn fila_tema(ui: &Rc<AppUi>, etiqueta: &str, clave: &str, mut temas: Vec<String>) -> ListBoxRow {
+    let actual = core::gsettings_get(clave).unwrap_or_default();
+    if !actual.is_empty() && !temas.iter().any(|t| t == &actual) {
+        temas.insert(0, actual.clone());
+    }
+    let textos: Vec<&str> = temas.iter().map(String::as_str).collect();
+    let modelo = StringList::new(&textos);
+    let combo = DropDown::new(Some(modelo.clone()), None::<gtk4::Expression>);
+    combo.set_valign(Align::Center);
+    combo.set_size_request(230, -1);
+    if let Some(idx) = temas.iter().position(|t| t == &actual) {
+        combo.set_selected(idx as u32);
+    }
+
+    ui.combos_temas
+        .borrow_mut()
+        .push((combo.clone(), modelo.clone(), clave.to_string()));
+
+    let ui2 = ui.clone();
+    let clave2 = clave.to_string();
+    combo.connect_selected_notify(move |c| {
+        let Some(valor) = modelo.string(c.selected()) else {
+            return;
+        };
+        let valor = valor.to_string();
+        // Cambios programáticos (por ejemplo, al aplicar un perfil) no se reaplican.
+        if valor == core::gsettings_get(&clave2).unwrap_or_default() {
+            return;
+        }
+        if core::gsettings_set(&clave2, &valor) {
+            ui2.toast(&format!("«{}» aplicado", valor), "emblem-ok-symbolic");
+        } else {
+            ui2.toast("No se pudo aplicar el tema", "dialog-warning-symbolic");
+        }
+    });
+
+    let caja = GtkBox::new(Orientation::Horizontal, 8);
+    caja.set_valign(Align::Center);
+    caja.append(&combo);
+    fila_ajuste(
+        "preferences-desktop-theme-symbolic",
+        etiqueta,
+        "Se aplica al momento; guárdalo en un perfil para conservarlo",
+        &caja,
+    )
+}
+
+/// Sincroniza los selectores de tema con los valores actuales del sistema
+/// (por ejemplo, tras aplicar un perfil guardado).
+fn actualizar_combos(ui: &Rc<AppUi>) {
+    for (combo, modelo, clave) in ui.combos_temas.borrow().iter() {
+        let actual = core::gsettings_get(clave).unwrap_or_default();
+        let idx = (0..modelo.n_items()).find(|i| {
+            modelo
+                .string(*i)
+                .map(|s| s.as_str() == actual.as_str())
+                .unwrap_or(false)
+        });
+        if let Some(idx) = idx {
+            combo.set_selected(idx);
+        }
+    }
 }
 
 /// Reconstruye la lista de perfiles guardados.
@@ -2561,6 +2667,12 @@ fn fila_perfil(ui: &Rc<AppUi>, perfil: &core::Perfil) -> ListBoxRow {
     if let Some(v) = &perfil.cinnamon {
         partes.push(format!("Cinnamon: {v}"));
     }
+    if let Some(v) = &perfil.iconos {
+        partes.push(format!("Iconos: {v}"));
+    }
+    if let Some(v) = &perfil.cursor {
+        partes.push(format!("Cursor: {v}"));
+    }
     if perfil.fastfetch.is_some() {
         partes.push("fastfetch".to_string());
     }
@@ -2583,10 +2695,13 @@ fn fila_perfil(ui: &Rc<AppUi>, perfil: &core::Perfil) -> ListBoxRow {
     let ui2 = ui.clone();
     let p2 = perfil.clone();
     btn_aplicar.connect_clicked(move |_| match core::aplicar_perfil(&p2) {
-        Ok(()) => ui2.toast(
-            &format!("Perfil «{}» aplicado", p2.nombre),
-            "emblem-ok-symbolic",
-        ),
+        Ok(()) => {
+            actualizar_combos(&ui2);
+            ui2.toast(
+                &format!("Perfil «{}» aplicado", p2.nombre),
+                "emblem-ok-symbolic",
+            );
+        }
         Err(e) => ui2.toast(
             &format!("No se pudo aplicar: {e}"),
             "dialog-warning-symbolic",
@@ -3152,6 +3267,7 @@ fn build_ui(app: &Application) {
         lightbox_sub: lightbox_sub.clone(),
         pendiente: RefCell::new(None),
         lista_perfiles: lista_perfiles.clone(),
+        combos_temas: RefCell::new(Vec::new()),
     });
 
     // Ajustes (necesita el estado ya construido)
