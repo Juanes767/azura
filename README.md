@@ -36,6 +36,10 @@ por debajo de las ventanas normales.
   cambiar de aplicación o de espacio de trabajo, con la pantalla bloqueada y
   por inactividad.
 - 🎛️ **Límite de FPS** para reducir el consumo de GPU.
+- 🔎 **Diagnóstico de decodificación**: indica si mpv usa hardware (VAAPI,
+  NVDEC…) o CPU, con aviso cuando cae a software.
+- 🖼️ **Imágenes sin proceso de vídeo**: los PNG/JPG se aplican como fondo
+  nativo de Cinnamon (0 % de CPU en reposo).
 - 🖥️ **Multi-monitor**: un fondo global o uno distinto por pantalla.
 - ⌨️ **Atajos globales** configurables para abrir el menú y cambiar de fondo.
 - 🔔 **Notificaciones** al cambiar de fondo.
@@ -57,13 +61,29 @@ sudo pacman -S mpv ffmpeg gtk4
 
 Probado en Linux Mint 22.3 (Cinnamon, X11).
 
-## 🔨 Compilación
+## 📦 Instalación (paquete .deb)
+
+Descarga el `.deb` desde
+[Releases](https://github.com/Juanes767/azura/releases), instálalo y activa
+el servicio:
+
+```bash
+sudo apt install ./wallpaper-animado_*.deb
+systemctl --user enable --now wallpaper-animado
+```
+
+El paquete instala los binarios, los iconos, el lanzador «Azura» y la unidad
+systemd de usuario. Luego abre «Azura» desde el menú de aplicaciones.
+
+## 🔨 Compilación desde el código
 
 ```bash
 git clone https://github.com/Juanes767/azura.git
 cd azura
 cargo build --release
 ```
+
+Para generar el `.deb` localmente: `cargo install cargo-deb && cargo deb`.
 
 ## 🚀 Uso
 
@@ -150,6 +170,26 @@ Al aplicar un perfil, kitty recarga su configuración al instante y los
 selectores se sincronizan. Guardar con un nombre que ya existe pide
 confirmación para reemplazarlo, y eliminar un perfil también pide
 confirmación.
+
+## 🆚 Azura frente a Hidamari
+
+Hidamari es la alternativa más conocida en GNOME; Komorebi (X11) está sin
+mantenimiento activo. Azura apunta a Cinnamon/Linux Mint con estas ventajas:
+
+| | Azura | Hidamari |
+| --- | --- | --- |
+| Escritorio objetivo | Cinnamon / X11 (Linux Mint) | GNOME (Flatpak) |
+| Biblioteca | miniaturas, búsqueda, etiquetas, favoritos, orden | carpeta de vídeos |
+| Cambio automático | sí (intervalo y orden aleatorio) | no |
+| Pausas inteligentes | batería, inactividad, bloqueo, app en primer plano, espacio de trabajo, pantalla completa | maximizado / pantalla completa |
+| Imágenes | fondo nativo de Cinnamon, sin proceso de vídeo | frame con desenfoque (GNOME) |
+| Perfiles de temas del sistema | sí (GTK, iconos, ventanas, Cinnamon, cursor) + fastfetch + kitty | no |
+| Multi-monitor | fondo distinto por pantalla | sí |
+| CLI, bandeja y atajos globales | completos | mínimos |
+| Decodificación por hardware | sí, con diagnóstico visible (VAAPI/NVDEC) | sí (VLC) |
+| Wayland | no (X11) | GNOME Wayland |
+
+Consumo medido y reproducible: ver [docs/rendimiento.md](docs/rendimiento.md).
 
 ## 📁 Rutas
 

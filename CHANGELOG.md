@@ -9,6 +9,24 @@ y el proyecto se adhiere a [Versionado Semántico](https://semver.org/lang/es/).
 
 ### Añadido
 
+- Paquete `.deb` (binarios, iconos, lanzador y unidad systemd de usuario)
+  y publicación automática de releases al crear un tag `v*`.
+- Diagnóstico real de decodificación: `wallpaper-animado status` y
+  Ajustes → Reproducción muestran si mpv usa hardware o CPU.
+- Las imágenes (PNG/JPG) se aplican como fondo nativo de Cinnamon sin
+  proceso de vídeo: 0 % de CPU en reposo.
+- `scripts/medir-rendimiento.sh` y [docs/rendimiento.md](docs/rendimiento.md)
+  con mediciones reales (12.3 % CPU con VAAPI frente a 107.6 % por CPU).
+- Sección del README comparando Azura con Hidamari.
+
+### Corregido
+
+- `gsettings set` ya no usa `--` (gsettings lo rechaza): los temas de los
+  perfiles y los selectores de «Aspecto del sistema» vuelven a aplicarse
+  de verdad.
+- El logo y los iconos del menú ya no dependen de la ruta del código
+  fuente: funcionan instalados desde el paquete.
+
 - Página de perfiles ampliada: sección **Aspecto del sistema** con selectores
   de tema de iconos (y color de carpetas), tema GTK, tema de ventanas, tema de
   Cinnamon y cursor; al elegir uno se aplica al instante.
