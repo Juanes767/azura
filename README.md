@@ -5,6 +5,10 @@ como fondo de escritorio, con biblioteca propia, miniaturas y bandeja del
 sistema. Cada fondo se reproduce con `mpv` situado al nivel del escritorio,
 por debajo de las ventanas normales.
 
+<p align="center">
+  <img src="assets/screenshot.png" alt="Captura de Azura con su biblioteca, vista previa y perfiles" width="860">
+</p>
+
 ## ✨ Características
 
 - 🎞️ **Vídeos e imágenes**: mp4, webm, mkv, mov, gif, png, jpg y jpeg.
