@@ -17,7 +17,6 @@ y el proyecto se adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   proceso de vídeo: 0 % de CPU en reposo.
 - `scripts/medir-rendimiento.sh` y [docs/rendimiento.md](docs/rendimiento.md)
   con mediciones reales (12.3 % CPU con VAAPI frente a 107.6 % por CPU).
-- Sección del README comparando Azura con Hidamari.
 - Colecciones con nombre: añade fondos desde la vista previa, filtra la
   biblioteca por colección y limita el cambio automático a una de ellas.
 - Historial de recientes: los últimos 30 fondos aplicados, también como
@@ -33,6 +32,8 @@ y el proyecto se adhiere a [Versionado Semántico](https://semver.org/lang/es/).
   de verdad.
 - El logo y los iconos del menú ya no dependen de la ruta del código
   fuente: funcionan instalados desde el paquete.
+- CI: la auditoría de dependencias usa `rustsec/audit-check@v2.0.0` (la
+  versión `v2.1.0` no existe y hacía fallar el flujo).
 
 - Página de perfiles ampliada: sección **Aspecto del sistema** con selectores
   de tema de iconos (y color de carpetas), tema GTK, tema de ventanas, tema de

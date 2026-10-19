@@ -5,17 +5,6 @@ como fondo de escritorio, con biblioteca propia, miniaturas y bandeja del
 sistema. Cada fondo se reproduce con `mpv` situado al nivel del escritorio,
 por debajo de las ventanas normales.
 
-![Plataforma](https://img.shields.io/badge/Plataforma-Linux%20%2F%20X11-blue?logo=linux&logoColor=white)
-![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust&logoColor=white)
-![GTK 4](https://img.shields.io/badge/GTK-4-4a86cf?logo=gtk&logoColor=white)
-![mpv](https://img.shields.io/badge/mpv-reproducci%C3%B3n-691f74?logo=mpv&logoColor=white)
-![Open Source](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)
-![Licencia](https://img.shields.io/badge/Licencia-MIT-green)
-
-<p align="center">
-  <img src="assets/screenshot.png" alt="Captura de Azura con su biblioteca, vista previa y perfiles" width="860">
-</p>
-
 ## ✨ Características
 
 - 🎞️ **Vídeos e imágenes**: mp4, webm, mkv, mov, gif, png, jpg y jpeg.
@@ -142,82 +131,6 @@ Presets disponibles (Ajustes → Atajos) para **abrir el menú** y para
 
 El daemon intenta registrar el atajo elegido; si ya está en uso, prueba los
 demás y reporta el que quedó activo en la interfaz.
-
-## 🖥️ Multi-monitor
-
-En Ajustes se puede fijar un fondo distinto por monitor. El selector
-**Pantalla** del destacado indica el destino al aplicar:
-
-- **Todos**: fondo global (limpia los fondos por monitor).
-- **Nombre del monitor**: solo esa pantalla.
-
-El cambio automático respeta los fondos ya fijados por monitor.
-
-## 🎨 Perfiles
-
-La página **Perfiles** de la barra lateral cambia el aspecto del sistema al
-momento y guarda tu personalización para restaurarla cuando quieras.
-
-**Aspecto del sistema**: selectores con los temas instalados en tu equipo; al
-elegir uno se aplica al instante:
-
-- **Iconos y color de carpetas**: tema de iconos (por ejemplo Mint-Y, Papirus
-  o cualquier tema con carpeta `icon-theme`).
-- **Tema de aplicaciones (GTK)** y **tema de ventanas**.
-- **Tema de escritorio (Cinnamon)**.
-- **Cursor**.
-
-Los temas se buscan en `/usr/share/themes`, `/usr/share/icons`, `~/.themes`,
-`~/.icons`, `~/.local/share/themes` y `~/.local/share/icons`.
-
-**Perfiles guardados**: guarda la combinación actual de temas (GTK, ventanas,
-Cinnamon, iconos y cursor), tu configuración de `fastfetch` y tu `kitty.conf`.
-Al aplicar un perfil, kitty recarga su configuración al instante y los
-selectores se sincronizan. Guardar con un nombre que ya existe pide
-confirmación para reemplazarlo, y eliminar un perfil también pide
-confirmación.
-
-## 🆚 Azura frente a Hidamari
-
-Hidamari es la alternativa más conocida en GNOME; Komorebi (X11) está sin
-mantenimiento activo. Azura apunta a Cinnamon/Linux Mint con estas ventajas:
-
-| | Azura | Hidamari |
-| --- | --- | --- |
-| Escritorio objetivo | Cinnamon / X11 (Linux Mint) | GNOME (Flatpak) |
-| Biblioteca | miniaturas, búsqueda, etiquetas, favoritos, colecciones, recientes, orden | carpeta de vídeos |
-| Cambio automático | sí (intervalo, orden aleatorio y rotación por colección) | no |
-| Pausas inteligentes | batería, inactividad, bloqueo, app en primer plano, espacio de trabajo, pantalla completa | maximizado / pantalla completa |
-| Imágenes | fondo nativo de Cinnamon, sin proceso de vídeo | frame con desenfoque (GNOME) |
-| Perfiles de temas del sistema | sí (GTK, iconos, ventanas, Cinnamon, cursor) + fastfetch + kitty | no |
-| Multi-monitor | fondo distinto por pantalla | sí |
-| CLI, bandeja y atajos globales | completos | mínimos |
-| Decodificación por hardware | sí, con diagnóstico visible (VAAPI/NVDEC) | sí (VLC) |
-| Wayland | no (X11) | GNOME Wayland |
-
-Consumo medido y reproducible: ver [docs/rendimiento.md](docs/rendimiento.md).
-
-## 📁 Rutas
-
-| Qué | Dónde |
-| --- | ----- |
-| Configuración | `~/.config/wallpaper-animado/config.json` |
-| Perfiles | `~/.config/wallpaper-animado/perfiles` |
-| Biblioteca | `~/wallpaper-animado/assets/wallpapers` (o `$WALLPAPERS_DIR`) |
-| Miniaturas | `~/.cache/wallpaper-animado/thumbs` |
-| Sockets (daemon, mpv, vista previa) | `$XDG_RUNTIME_DIR/wallpaper-animado/` |
-
-## ⚠️ Limitaciones
-
-- Solo X11: en Wayland el fondo no se puede anclar al escritorio.
-
-## 🔐 Seguridad
-
-- Los sockets del daemon, de mpv y de la vista previa viven en
-  `$XDG_RUNTIME_DIR/wallpaper-animado/` con permisos `0700`, y el daemon solo
-  acepta conexiones del mismo usuario.
-- Los perfiles y la configuración se validan y se escriben de forma atómica.
-- Para reportar una vulnerabilidad, consulta [SECURITY.md](SECURITY.md).
 
 ## 📄 Licencia
 
