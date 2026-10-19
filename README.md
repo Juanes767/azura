@@ -5,6 +5,13 @@ como fondo de escritorio, con biblioteca propia, miniaturas y bandeja del
 sistema. Cada fondo se reproduce con `mpv` situado al nivel del escritorio,
 por debajo de las ventanas normales.
 
+![Plataforma](https://img.shields.io/badge/Plataforma-Linux%20%2F%20X11-blue?logo=linux&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust&logoColor=white)
+![GTK 4](https://img.shields.io/badge/GTK-4-4a86cf?logo=gtk&logoColor=white)
+![mpv](https://img.shields.io/badge/mpv-reproducci%C3%B3n-691f74?logo=mpv&logoColor=white)
+![Open Source](https://img.shields.io/badge/Open%20Source-%E2%9D%A4-red)
+![Licencia](https://img.shields.io/badge/Licencia-MIT-green)
+
 <p align="center">
   <img src="assets/screenshot.png" alt="Captura de Azura con su biblioteca, vista previa y perfiles" width="860">
 </p>
